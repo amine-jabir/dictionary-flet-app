@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dictionary-app"
+version = "1.0.0"
+description = "Production-grade cross-platform English dictionary application with offline lexicon, multi-provider fallback, audio pronunciation, and responsive Flet UI."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Dictionary Project Team"}
+]
+keywords = ["dictionary", "flet", "lexicon", "wiktionary", "audio", "offline", "cross-platform"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Education",
+    "Topic :: Text Processing :: Linguistic",
+]
+dependencies = [
+    "requests>=2.28.0",
+    "flet>=0.21.0",
+]
+
+[project.scripts]
+dict-cli = "dict_core.cli:main"
+dict-gui = "dict_client_flet.main:run"
+
+[tool.setuptools.packages.find]
+include = ["dict_core*", "dict_client_flet*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.db", "*.json", "*.txt"]
+
+[tool.flet]
+app_name = "dictionary"
+org = "com.dictionary"
+product_name = "Dictionary"
+company_name = "Dictionary App"
+copyright = "Copyright (c) 2026"
