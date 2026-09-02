@@ -1,24 +1,18 @@
 """
 Cross-platform Audio Player for the Flet client.
-Integrates Flet's Audio control (via flet_audio / flet.Audio) for mobile (Android/iOS)
-and web with native OS fallback playback (Windows, macOS, Linux).
-Supports live pronunciation playback and Text-to-Speech (TTS).
+Provides native OS audio playback on desktop (Windows, macOS, Linux)
+and seamless zero-widget direct stream playback on mobile (Android/iOS)
+via page.launch_url, preventing Flutter 'Unknown control: Audio' exceptions.
 """
 
 import os
 from pathlib import Path
 import platform
 import sys
-import threading
 from typing import Any, Callable, Dict, Optional
 import urllib.parse
 import flet as ft
 
-from dict_client_flet.ui.flet_compat import (
-    create_audio_control,
-    get_audio_class,
-    is_audio_control,
-)
 from dict_core.interfaces.audio import BaseAudioPlayer, PlatformAudioPlayer
 from dict_core.utils.logger import get_logger
 
@@ -27,20 +21,24 @@ logger = get_logger("dict_client.audio_player")
 
 class FletAudioPlayer(BaseAudioPlayer):
     """
-    Cross-platform audio player engine combining Flet Audio control
-    with native OS multimedia fallbacks.
+    Cross-platform audio player engine combining native OS multimedia players
+    with safe direct-stream launching on mobile devices.
     """
 
     def __init__(self, page: Optional[ft.Page] = None) -> None:
         self.page = page
         self._native_player = PlatformAudioPlayer()
-        self._audio_control: Any = None
         self._playing = False
-        self._last_backend = "Flet Audio"
+        self._last_backend = "System Audio"
+        self._current_url: Optional[str] = None
 
     def set_page(self, page: ft.Page) -> None:
         """Attaches the active Flet Page."""
         self.page = page
+
+    def set_current_url(self, url: Optional[str]) -> None:
+        """Records the online stream URL for the pending audio playback."""
+        self._current_url = url
 
     @property
     def player_name(self) -> str:
@@ -51,18 +49,14 @@ class FletAudioPlayer(BaseAudioPlayer):
         return self._last_backend
 
     def get_system_diagnostics(self) -> Dict[str, Any]:
-        """Returns diagnostics on the Flet audio pipeline and underlying platform drivers."""
+        """Returns diagnostics on the audio pipeline and available drivers."""
         native_diag = self._native_player.get_system_diagnostics()
-        AudioClass = get_audio_class()
         diag = {
             "player_engine": "FletAudioPlayer",
             "has_page_attached": self.page is not None,
-            "flet_audio_class_available": AudioClass is not None,
-            "flet_audio_mounted": self._audio_control is not None,
+            "is_mobile": self.is_mobile_or_android(),
             "last_backend_used": self.last_backend_used,
-            "available_backends": [
-                f"Flet Audio ({'Ready' if AudioClass else 'Missing flet_audio'})"
-            ],
+            "available_backends": ["Mobile Direct Stream (Zero-Widget Native Audio)"],
         }
         for b in native_diag.get("available_backends", []):
             if b not in diag["available_backends"]:
@@ -88,7 +82,7 @@ class FletAudioPlayer(BaseAudioPlayer):
         on_complete: Optional[Callable[[], None]] = None,
         on_error: Optional[Callable[[Exception], None]] = None,
     ) -> None:
-        """Speaks text aloud using native OS Speech Synthesis or TTS audio stream fallback."""
+        """Speaks text aloud using native OS speech on desktop or direct TTS stream on mobile."""
         clean_text = str(text or "").strip()
         if not clean_text:
             if on_complete:
@@ -103,13 +97,13 @@ class FletAudioPlayer(BaseAudioPlayer):
                 self._last_backend = getattr(self._native_player, "last_backend_used", "Native OS Speech")
                 return
             except Exception as exc:
-                logger.debug("Native TTS failed (%s), falling back to TTS stream...", exc)
+                logger.debug("Native desktop TTS failed (%s), falling back to TTS stream...", exc)
 
-        # On mobile/Android or systems without local TTS engine, stream Google TTS audio
+        # On mobile/Android or systems without local TTS engine, stream Google TTS audio directly
         encoded = urllib.parse.quote(clean_text)
         tts_url = f"https://translate.google.com/translate_tts?ie=UTF-8&tl=en&client=tw-ob&q={encoded}"
         self.play(tts_url, on_complete=on_complete, on_error=on_error)
-        self._last_backend = "Google TTS Audio Stream (Flet Audio)"
+        self._last_backend = "Google TTS (Native Stream)"
 
     def play(
         self,
@@ -117,122 +111,75 @@ class FletAudioPlayer(BaseAudioPlayer):
         on_complete: Optional[Callable[[], None]] = None,
         on_error: Optional[Callable[[Exception], None]] = None,
     ) -> None:
-        """Plays audio stream or file using Flet's Audio engine, with native OS fallback."""
+        """
+        Plays audio stream or file.
+        On mobile: launches audio stream directly via page.launch_url without mounting
+        any widget, completely preventing the 'Unknown control: Audio' Flutter error.
+        On desktop: plays via native OS drivers (Windows PowerShell, macOS afplay, Linux mpv/aplay).
+        """
         self.stop()
         self._playing = True
 
-        AudioClass = get_audio_class()
-
-        # 1. Attempt playback via Flet Audio (Primary for Mobile / Android / Cross-Platform)
-        if self.page and hasattr(self.page, "overlay") and AudioClass is not None:
+        # 1. Mobile (Android / iOS): Direct System Stream Playback (No Widget, No Unknown Control)
+        if self.is_mobile_or_android():
             try:
-                if self._audio_control:
-                    try:
-                        if hasattr(self._audio_control, "release"):
-                            self._audio_control.release()
-                    except Exception:
-                        pass
-
-                # Safely remove existing audio controls from overlay
-                try:
-                    self.page.overlay = [
-                        c for c in self.page.overlay
-                        if not is_audio_control(c)
-                    ]
-                except Exception:
-                    pass
-
-                def _handle_state_changed(e: Any) -> None:
-                    state = str(getattr(e, "data", "") or getattr(e, "state", "") or "").lower()
-                    if "completed" in state or "stopped" in state:
-                        self._playing = False
-                        if on_complete:
-                            try:
-                                on_complete()
-                            except Exception:
-                                pass
-
-                # Resolve audio URI (HTTPS URL or absolute filesystem path)
-                src_uri = audio_path
-                if not (audio_path.startswith("http://") or audio_path.startswith("https://")):
-                    src_uri = str(Path(audio_path).resolve())
-
-                # Dynamically construct control without invalid keyword arguments
-                self._audio_control = create_audio_control(
-                    AudioClass=AudioClass,
-                    src=src_uri,
-                    autoplay=True,
-                    volume=1.0,
-                    on_state_callback=_handle_state_changed,
-                )
-
-                self.page.overlay.append(self._audio_control)
-                self.page.update()
-
-                try:
-                    if hasattr(self._audio_control, "play"):
-                        self._audio_control.play()
-                except Exception:
-                    pass
-
-                self._last_backend = "Flet Audio (Flutter audioplayers)"
-                logger.info("[AUDIO PLAYER] Dispatched via Flet Audio for %s", audio_path)
-                return
-
-            except Exception as exc:
-                logger.warning("Flet Audio dispatch error (%s), attempting native fallback...", exc)
-                if self.is_mobile_or_android():
-                    self._playing = False
-                    if on_error:
-                        on_error(exc)
+                stream_url = self._current_url
+                if not stream_url:
+                    if audio_path.startswith("http://") or audio_path.startswith("https://"):
+                        stream_url = audio_path
                     else:
-                        raise
+                        # Fallback to Google TTS pronunciation for the word
+                        stem = Path(audio_path).stem
+                        word = stem.replace("audio_", "").split("_")[0]
+                        encoded = urllib.parse.quote(word or "word")
+                        stream_url = f"https://translate.google.com/translate_tts?ie=UTF-8&tl=en&client=tw-ob&q={encoded}"
+
+                if self.page and hasattr(self.page, "launch_url"):
+                    self.page.launch_url(stream_url)
+                    self._last_backend = "Android System Audio (Direct Stream)"
+                    logger.info("[AUDIO PLAYER] Dispatched via page.launch_url for %s", stream_url)
+                    self._playing = False
+                    if on_complete:
+                        on_complete()
                     return
-
-        # 2. Native OS Player Fallback (Desktop Windows, macOS, Linux only)
-        if not self.is_mobile_or_android():
-            def _wrap_complete():
-                self._playing = False
-                if on_complete:
-                    on_complete()
-
-            def _wrap_error(exc: Exception):
-                self._playing = False
-                if on_error:
-                    on_error(exc)
-
-            try:
-                self._native_player.play(
-                    audio_path=audio_path,
-                    on_complete=_wrap_complete,
-                    on_error=_wrap_error,
-                )
-                self._last_backend = getattr(self._native_player, "last_backend_used", self._native_player.player_name)
+                else:
+                    raise RuntimeError("Active Flet page unavailable for audio launching.")
             except Exception as exc:
+                logger.warning("Mobile audio dispatch error: %s", exc)
                 self._playing = False
                 if on_error:
                     on_error(exc)
                 else:
                     raise
-        else:
+                return
+
+        # 2. Desktop OS Player Fallback (Windows, macOS, Linux)
+        def _wrap_complete():
             self._playing = False
-            msg = "Audio playback component (flet_audio) is missing or could not initialize overlay."
-            err = RuntimeError(msg)
+            if on_complete:
+                on_complete()
+
+        def _wrap_error(exc: Exception):
+            self._playing = False
             if on_error:
-                on_error(err)
+                on_error(exc)
+
+        try:
+            self._native_player.play(
+                audio_path=audio_path,
+                on_complete=_wrap_complete,
+                on_error=_wrap_error,
+            )
+            self._last_backend = getattr(self._native_player, "last_backend_used", self._native_player.player_name)
+        except Exception as exc:
+            self._playing = False
+            if on_error:
+                on_error(exc)
             else:
-                raise err
+                raise
 
     def stop(self) -> None:
         self._playing = False
-        if self._audio_control:
-            try:
-                if hasattr(self._audio_control, "pause"):
-                    self._audio_control.pause()
-                if hasattr(self._audio_control, "release"):
-                    self._audio_control.release()
-            except Exception:
-                pass
         self._native_player.stop()
 
     def is_playing(self) -> bool:

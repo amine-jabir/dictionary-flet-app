@@ -152,6 +152,13 @@ class AudioService:
         """
         logger.info("[AUDIO PIPELINE] PLAY REQUEST initiated")
         try:
+            resolved_url = self.resolve_audio_url(source)
+            if hasattr(self.player, "set_current_url"):
+                self.player.set_current_url(resolved_url)
+        except Exception:
+            pass
+
+        try:
             local_path = self.get_audio_file(source)
         except Exception as exc:
             logger.error("[AUDIO PIPELINE] PLAY REQUEST FAILED during download/cache: %s", exc)
