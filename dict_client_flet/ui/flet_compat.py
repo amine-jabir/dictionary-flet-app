@@ -545,3 +545,51 @@ def set_clipboard_compat(page: Any, text: str) -> None:
         page.update()
     except Exception:
         pass
+
+
+def create_audio_control(
+    AudioClass: Any,
+    src: Any,
+    autoplay: bool = True,
+    volume: float = 1.0,
+    on_state_callback: Optional[Callable[[Any], None]] = None,
+) -> Any:
+    """
+    Safely constructs an Audio control by dynamically inspecting the target class constructor signature.
+    Prevents unexpected keyword argument errors across flet_audio and older flet versions.
+    """
+    import inspect
+
+    if not AudioClass:
+        return None
+
+    try:
+        sig = inspect.signature(AudioClass.__init__)
+        params = sig.parameters
+    except Exception:
+        params = {}
+
+    kwargs: dict = {}
+    if not params or "src" in params:
+        kwargs["src"] = src
+    if not params or "autoplay" in params:
+        kwargs["autoplay"] = autoplay
+    if not params or "volume" in params:
+        kwargs["volume"] = volume
+
+    if on_state_callback:
+        if "on_state_change" in params:
+            kwargs["on_state_change"] = on_state_callback
+        elif "on_state_changed" in params:
+            kwargs["on_state_changed"] = on_state_callback
+        elif not params:
+            kwargs["on_state_change"] = on_state_callback
+
+    try:
+        return AudioClass(**kwargs)
+    except TypeError:
+        # Fallback to minimal constructor
+        try:
+            return AudioClass(src=src, autoplay=autoplay)
+        except Exception:
+            return AudioClass(src)

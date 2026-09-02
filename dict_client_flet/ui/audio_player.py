@@ -5,7 +5,6 @@ and web with native OS fallback playback (Windows, macOS, Linux).
 Supports live pronunciation playback and Text-to-Speech (TTS).
 """
 
-import base64
 import os
 from pathlib import Path
 import platform
@@ -15,7 +14,11 @@ from typing import Any, Callable, Dict, Optional
 import urllib.parse
 import flet as ft
 
-from dict_client_flet.ui.flet_compat import get_audio_class, is_audio_control
+from dict_client_flet.ui.flet_compat import (
+    create_audio_control,
+    get_audio_class,
+    is_audio_control,
+)
 from dict_core.interfaces.audio import BaseAudioPlayer, PlatformAudioPlayer
 from dict_core.utils.logger import get_logger
 
@@ -58,7 +61,7 @@ class FletAudioPlayer(BaseAudioPlayer):
             "flet_audio_mounted": self._audio_control is not None,
             "last_backend_used": self.last_backend_used,
             "available_backends": [
-                f"Flet Audio ({'Available' if AudioClass else 'Missing flet_audio'})"
+                f"Flet Audio ({'Ready' if AudioClass else 'Missing flet_audio'})"
             ],
         }
         for b in native_diag.get("available_backends", []):
@@ -149,27 +152,19 @@ class FletAudioPlayer(BaseAudioPlayer):
                             except Exception:
                                 pass
 
-                # Handle remote URL vs local audio file
-                if audio_path.startswith("http://") or audio_path.startswith("https://"):
-                    self._audio_control = AudioClass(
-                        src=audio_path,
-                        autoplay=True,
-                        volume=1.0,
-                        on_state_changed=_handle_state_changed,
-                    )
-                else:
-                    file_p = Path(audio_path).resolve()
-                    if file_p.exists() and file_p.stat().st_size > 0:
-                        with open(file_p, "rb") as af:
-                            b64_str = base64.b64encode(af.read()).decode("ascii")
-                        self._audio_control = AudioClass(
-                            src_base64=b64_str,
-                            autoplay=True,
-                            volume=1.0,
-                            on_state_changed=_handle_state_changed,
-                        )
-                    else:
-                        raise FileNotFoundError(f"Audio file not found: {audio_path}")
+                # Resolve audio URI (HTTPS URL or absolute filesystem path)
+                src_uri = audio_path
+                if not (audio_path.startswith("http://") or audio_path.startswith("https://")):
+                    src_uri = str(Path(audio_path).resolve())
+
+                # Dynamically construct control without invalid keyword arguments
+                self._audio_control = create_audio_control(
+                    AudioClass=AudioClass,
+                    src=src_uri,
+                    autoplay=True,
+                    volume=1.0,
+                    on_state_callback=_handle_state_changed,
+                )
 
                 self.page.overlay.append(self._audio_control)
                 self.page.update()

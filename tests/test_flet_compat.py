@@ -123,3 +123,28 @@ if __name__ == "__main__":
         mock_legacy = MagicMock(spec=["update", "set_clipboard"])
         set_clipboard_compat(mock_legacy, "clip_legacy")
         mock_legacy.set_clipboard.assert_called_once_with("clip_legacy")
+
+    def test_create_audio_control(self) -> None:
+        from dict_client_flet.ui.flet_compat import create_audio_control
+
+        class MockAudioA:
+            def __init__(self, src=None, autoplay=False, volume=1.0, on_state_change=None):
+                self.src = src
+                self.autoplay = autoplay
+                self.volume = volume
+
+        class MockAudioB:
+            def __init__(self, src=None, autoplay=False, volume=1.0, on_state_changed=None):
+                self.src = src
+                self.autoplay = autoplay
+                self.volume = volume
+
+        a = create_audio_control(MockAudioA, "song.mp3", autoplay=True, volume=0.8)
+        self.assertEqual(a.src, "song.mp3")
+        self.assertTrue(a.autoplay)
+        self.assertEqual(a.volume, 0.8)
+
+        b = create_audio_control(MockAudioB, "song.mp3", autoplay=False, volume=0.5)
+        self.assertEqual(b.src, "song.mp3")
+        self.assertFalse(b.autoplay)
+        self.assertEqual(b.volume, 0.5)

@@ -22,6 +22,7 @@ from dict_client_flet.ui.flet_compat import (
     open_dialog_compat,
     pad_all,
     pad_symmetric,
+    set_clipboard_compat,
 )
 from dict_client_flet.ui.theme import ColorPalette
 
@@ -70,81 +71,100 @@ def show_audio_diagnostics_dialog(
             pass
 
     def on_run_diag(_):
-        val = test_input.value.strip() or default_test_val
-        status_label.value = "⏳ Running audio resolution and network tests..."
-        status_label.color = palette.primary
-        safe_page_update()
-
-        def _sync_worker():
-            try:
-                diag_result = state.audio_service.diagnose_audio(val)
-                lines = [
-                    "=" * 50,
-                    "       AUDIO SUBSYSTEM DIAGNOSTIC REPORT",
-                    "=" * 50,
-                    f"Target Input: {val}",
-                    f"Resolved URL: {diag_result.get('resolved_url')}",
-                    f"Cache Status: {'CACHED ON DISK' if diag_result.get('is_cached') else 'NOT CACHED'}",
-                    f"Cache File: {diag_result.get('cache_file_path') or 'None'}",
-                    f"Cache File Size: {diag_result.get('cache_file_size', 0)} bytes",
-                    f"HTTP Response: {diag_result.get('http_status') or 'N/A'}",
-                    f"Content-Type: {diag_result.get('content_type') or 'N/A'}",
-                    f"Player Engine: {diag_result.get('player_engine')}",
-                    f"Diagnostic Result: {diag_result.get('status')}",
-                ]
-                if diag_result.get("error"):
-                    lines.append(f"Reported Error: {diag_result.get('error')}")
-
-                lines.append("\nStep-by-Step Execution Log:")
-                lines.extend(diag_result.get("logs", []))
-                lines.append("=" * 50)
-
-                report_str = "\n".join(lines)
-                log_display.value = report_str
-                status_label.value = f"Diagnostic Status: {diag_result.get('status')}"
-                status_label.color = palette.success if diag_result.get("status") == "READY_FOR_PLAYBACK" else palette.error
-            except Exception as exc:
-                log_display.value = f"Diagnostic Execution Failed: {exc}"
-                status_label.value = f"Error: {exc}"
-                status_label.color = palette.error
+        try:
+            val = test_input.value.strip() or default_test_val
+            status_label.value = "⏳ Running audio resolution and network tests..."
+            status_label.color = palette.primary
             safe_page_update()
 
-        threading.Thread(target=_sync_worker, daemon=True).start()
+            def _sync_worker():
+                try:
+                    diag_result = state.audio_service.diagnose_audio(val)
+                    lines = [
+                        "=" * 50,
+                        "       AUDIO SUBSYSTEM DIAGNOSTIC REPORT",
+                        "=" * 50,
+                        f"Target Input: {val}",
+                        f"Resolved URL: {diag_result.get('resolved_url')}",
+                        f"Cache Status: {'CACHED ON DISK' if diag_result.get('is_cached') else 'NOT CACHED'}",
+                        f"Cache File: {diag_result.get('cache_file_path') or 'None'}",
+                        f"Cache File Size: {diag_result.get('cache_file_size', 0)} bytes",
+                        f"HTTP Response: {diag_result.get('http_status') or 'N/A'}",
+                        f"Content-Type: {diag_result.get('content_type') or 'N/A'}",
+                        f"Player Engine: {diag_result.get('player_engine')}",
+                        f"Diagnostic Result: {diag_result.get('status')}",
+                    ]
+                    if diag_result.get("error"):
+                        lines.append(f"Reported Error: {diag_result.get('error')}")
+
+                    lines.append("\nStep-by-Step Execution Log:")
+                    lines.extend(diag_result.get("logs", []))
+                    lines.append("=" * 50)
+
+                    report_str = "\n".join(lines)
+                    log_display.value = report_str
+                    status_label.value = f"Diagnostic Status: {diag_result.get('status')}"
+                    status_label.color = palette.success if diag_result.get("status") == "READY_FOR_PLAYBACK" else palette.error
+                except Exception as exc:
+                    log_display.value = f"Diagnostic Execution Failed: {exc}"
+                    status_label.value = f"Error: {exc}"
+                    status_label.color = palette.error
+                safe_page_update()
+
+            threading.Thread(target=_sync_worker, daemon=True).start()
+        except Exception as exc:
+            status_label.value = f"Notice: {exc}"
+            safe_page_update()
 
     def on_test_play(_):
-        val = test_input.value.strip() or default_test_val
-        status_label.value = f"🔊 Triggering playback for '{val}'..."
-        status_label.color = palette.primary
-        safe_page_update()
-
-        def _play_worker():
-            try:
-                state.audio_service.play(val)
-                backend = getattr(state.audio_service.player, "last_backend_used", state.audio_service.player.player_name)
-                status_label.value = f"✅ Playback dispatched via: {backend}"
-                status_label.color = palette.success
-            except Exception as exc:
-                status_label.value = f"⚠️ Playback error: {exc}"
-                status_label.color = palette.error
+        try:
+            val = test_input.value.strip() or default_test_val
+            status_label.value = f"🔊 Triggering playback for '{val}'..."
+            status_label.color = palette.primary
             safe_page_update()
 
-        threading.Thread(target=_play_worker, daemon=True).start()
+            def _play_worker():
+                try:
+                    state.audio_service.play(val)
+                    backend = getattr(state.audio_service.player, "last_backend_used", state.audio_service.player.player_name)
+                    status_label.value = f"✅ Playback dispatched via: {backend}"
+                    status_label.color = palette.success
+                except Exception as exc:
+                    status_label.value = f"⚠️ Playback error: {exc}"
+                    status_label.color = palette.error
+                safe_page_update()
+
+            threading.Thread(target=_play_worker, daemon=True).start()
+        except Exception as exc:
+            status_label.value = f"Playback notice: {exc}"
+            safe_page_update()
 
     def on_test_tts(_):
-        val = test_input.value.strip() or default_test_val
-        status_label.value = f"🗣️ Speaking '{val}' via Voice..."
-        status_label.color = palette.primary
-        safe_page_update()
-        state.speak_tts(val)
+        try:
+            val = test_input.value.strip() or default_test_val
+            status_label.value = f"🗣️ Speaking '{val}' via Voice..."
+            status_label.color = palette.primary
+            safe_page_update()
+            state.speak_tts(val)
+        except Exception as exc:
+            status_label.value = f"Voice notice: {exc}"
+            safe_page_update()
 
     def on_copy(_):
-        page.set_clipboard(log_display.value)
-        status_label.value = "📋 Diagnostic report copied to clipboard!"
-        status_label.color = palette.success
-        safe_page_update()
+        try:
+            set_clipboard_compat(page, log_display.value)
+            status_label.value = "📋 Diagnostic report copied to clipboard!"
+            status_label.color = palette.success
+            safe_page_update()
+        except Exception as exc:
+            status_label.value = f"Copy notice: {exc}"
+            safe_page_update()
 
     def on_close(_):
-        close_dialog_compat(page, dialog)
+        try:
+            close_dialog_compat(page, dialog)
+        except Exception:
+            pass
 
     page_width = getattr(page, "width", 400) or 400
     dialog_width = min(max(page_width - 32, 280), 540)
