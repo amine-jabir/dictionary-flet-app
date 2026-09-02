@@ -2,8 +2,10 @@
 Interactive Audio Diagnostics & Test Dialog for the Flet UI.
 Provides step-by-step diagnostic inspection, live network/driver testing,
 and full copyable diagnostic logs for debugging audio issues.
+Responsive for both mobile (narrow viewports) and desktop displays.
 """
 
+import threading
 from typing import Any, Optional
 import flet as ft
 
@@ -11,11 +13,13 @@ from dict_client_flet.state.app_state import AppState
 from dict_client_flet.ui.flet_compat import (
     border_all,
     border_radius_all,
+    close_dialog_compat,
     create_elevated_button,
     create_icon,
     create_outlined_button,
     create_text_button,
     get_icon,
+    open_dialog_compat,
     pad_all,
     pad_symmetric,
 )
@@ -27,7 +31,7 @@ def show_audio_diagnostics_dialog(
     state: AppState,
     palette: ColorPalette,
 ) -> None:
-    """Displays the comprehensive interactive audio diagnostics dialog."""
+    """Displays the comprehensive interactive audio diagnostics dialog with mobile-responsive layout."""
     default_test_val = state.current_entry.word if state.current_entry else "hello"
 
     test_input = ft.TextField(
@@ -39,13 +43,13 @@ def show_audio_diagnostics_dialog(
     )
 
     log_display = ft.TextField(
-        value=state.audio_diagnostic_text or "Click 'Run Live Diagnostics' below to inspect the audio pipeline...",
+        value=state.audio_diagnostic_text or "Click 'Run Diagnostics' below to inspect the audio pipeline...",
         label="Diagnostic Log Output (Selectable & Copyable)",
         multiline=True,
         read_only=True,
-        text_size=12,
-        min_lines=10,
-        max_lines=16,
+        text_size=11,
+        min_lines=6,
+        max_lines=12,
         text_style=ft.TextStyle(font_family="monospace"),
     )
 
@@ -56,19 +60,28 @@ def show_audio_diagnostics_dialog(
         color=palette.text_secondary,
     )
 
+    def safe_page_update() -> None:
+        try:
+            if hasattr(state, "ui_runner") and state.ui_runner:
+                state.ui_runner(page.update)
+            else:
+                page.update()
+        except Exception:
+            pass
+
     def on_run_diag(_):
         val = test_input.value.strip() or default_test_val
         status_label.value = "⏳ Running audio resolution and network tests..."
         status_label.color = palette.primary
-        page.update()
+        safe_page_update()
 
         def _sync_worker():
             try:
                 diag_result = state.audio_service.diagnose_audio(val)
                 lines = [
-                    "=" * 55,
-                    "        AUDIO SUBSYSTEM DIAGNOSTIC REPORT",
-                    "=" * 55,
+                    "=" * 50,
+                    "       AUDIO SUBSYSTEM DIAGNOSTIC REPORT",
+                    "=" * 50,
                     f"Target Input: {val}",
                     f"Resolved URL: {diag_result.get('resolved_url')}",
                     f"Cache Status: {'CACHED ON DISK' if diag_result.get('is_cached') else 'NOT CACHED'}",
@@ -84,7 +97,7 @@ def show_audio_diagnostics_dialog(
 
                 lines.append("\nStep-by-Step Execution Log:")
                 lines.extend(diag_result.get("logs", []))
-                lines.append("=" * 55)
+                lines.append("=" * 50)
 
                 report_str = "\n".join(lines)
                 log_display.value = report_str
@@ -94,16 +107,15 @@ def show_audio_diagnostics_dialog(
                 log_display.value = f"Diagnostic Execution Failed: {exc}"
                 status_label.value = f"Error: {exc}"
                 status_label.color = palette.error
-            page.update()
+            safe_page_update()
 
-        import threading
         threading.Thread(target=_sync_worker, daemon=True).start()
 
     def on_test_play(_):
         val = test_input.value.strip() or default_test_val
         status_label.value = f"🔊 Triggering playback for '{val}'..."
         status_label.color = palette.primary
-        page.update()
+        safe_page_update()
 
         def _play_worker():
             try:
@@ -114,32 +126,28 @@ def show_audio_diagnostics_dialog(
             except Exception as exc:
                 status_label.value = f"⚠️ Playback error: {exc}"
                 status_label.color = palette.error
-            page.update()
+            safe_page_update()
 
-        import threading
         threading.Thread(target=_play_worker, daemon=True).start()
 
     def on_test_tts(_):
         val = test_input.value.strip() or default_test_val
         status_label.value = f"🗣️ Speaking '{val}' via System Voice (TTS)..."
         status_label.color = palette.primary
-        page.update()
+        safe_page_update()
         state.speak_tts(val)
 
     def on_copy(_):
         page.set_clipboard(log_display.value)
         status_label.value = "📋 Diagnostic report copied to clipboard!"
         status_label.color = palette.success
-        page.update()
+        safe_page_update()
 
     def on_close(_):
-        if hasattr(page, "close_dialog"):
-            page.close_dialog()
-        elif hasattr(page, "pop_dialog"):
-            page.pop_dialog()
-        elif hasattr(page, "dialog") and page.dialog:
-            page.dialog.open = False
-            page.update()
+        close_dialog_compat(page, dialog)
+
+    page_width = getattr(page, "width", 400) or 400
+    dialog_width = min(max(page_width - 32, 280), 560)
 
     dialog_content = ft.Container(
         content=ft.Column(
@@ -156,6 +164,7 @@ def show_audio_diagnostics_dialog(
                         ),
                     ],
                     spacing=8,
+                    wrap=True,
                 ),
                 ft.Row(
                     controls=[
@@ -176,6 +185,7 @@ def show_audio_diagnostics_dialog(
                         ),
                     ],
                     spacing=8,
+                    wrap=True,
                 ),
                 ft.Container(
                     content=log_display,
@@ -186,8 +196,9 @@ def show_audio_diagnostics_dialog(
             ],
             spacing=10,
             tight=True,
+            scroll=ft.ScrollMode.AUTO,
         ),
-        width=620,
+        width=dialog_width,
         padding=pad_all(8),
     )
 
@@ -195,7 +206,7 @@ def show_audio_diagnostics_dialog(
         title=ft.Row(
             controls=[
                 create_icon("SETTINGS", color=palette.primary),
-                ft.Text("Audio Subsystem Diagnostics & Test", weight="bold", size=16),
+                ft.Text("Audio Diagnostics & Test", weight="bold", size=16),
             ],
             spacing=8,
         ),
@@ -209,11 +220,4 @@ def show_audio_diagnostics_dialog(
         actions_alignment=ft.MainAxisAlignment.END,
     )
 
-    if hasattr(page, "open_dialog"):
-        page.open_dialog(dialog)
-    elif hasattr(page, "show_dialog"):
-        page.show_dialog(dialog)
-    else:
-        page.dialog = dialog
-        dialog.open = True
-        page.update()
+    open_dialog_compat(page, dialog)

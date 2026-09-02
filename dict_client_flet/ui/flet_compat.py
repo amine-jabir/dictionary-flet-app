@@ -1,7 +1,7 @@
 """
 Flet cross-version compatibility helpers supporting Flet <0.80, 0.80+, and 0.86+.
 Provides robust, version-safe factories for icons, buttons, navigation, padding, margins,
-borders, radii, and alignments.
+dialog management, and safe area wrapping.
 """
 
 from typing import Any, Callable, Optional, Union
@@ -13,10 +13,7 @@ except ImportError:
 
 
 def get_icon(name: Optional[str]) -> Any:
-    """
-    Resolves an icon name string (e.g. 'SEARCH', 'DARK_MODE', 'MENU_BOOK')
-    to the actual IconData object from ft.Icons or ft.icons across all Flet versions.
-    """
+    """Resolves an icon name string to an IconData object across all Flet versions."""
     if not name or not isinstance(name, str):
         return None
 
@@ -24,17 +21,14 @@ def get_icon(name: Optional[str]) -> Any:
     if ft is None:
         return clean.lower()
 
-    # 1. Check ft.Icons (Flet 0.80+ / 0.86+)
     IconsClass = getattr(ft, "Icons", None)
     if IconsClass and hasattr(IconsClass, clean):
         return getattr(IconsClass, clean)
 
-    # 2. Check ft.icons (legacy Flet)
     icons_mod = getattr(ft, "icons", None)
     if icons_mod and hasattr(icons_mod, clean):
         return getattr(icons_mod, clean)
 
-    # 3. Common aliases and fallback mappings
     alias_map = {
         "FAVORITE_BORDER": "FAVORITE_OUTLINE",
         "CLEAR": "CLOSE",
@@ -104,7 +98,6 @@ def create_icon_button(
     try:
         return ft.IconButton(icon=icon_data, **kwargs)
     except Exception:
-        # Fallback to wrapping Icon control inside content
         kwargs.pop("icon_size", None)
         kwargs.pop("icon_color", None)
         return ft.IconButton(
@@ -119,10 +112,7 @@ def create_text_button(
     on_click: Optional[Callable[[Any], None]] = None,
     color: Optional[str] = None,
 ) -> Any:
-    """
-    Creates an ft.TextButton compatible with modern Flet (content=Control)
-    and legacy Flet (text=str).
-    """
+    """Creates an ft.TextButton compatible with modern Flet and legacy Flet."""
     if ft is None:
         return None
 
@@ -163,10 +153,7 @@ def create_elevated_button(
     bgcolor: Optional[str] = None,
     color: Optional[str] = None,
 ) -> Any:
-    """
-    Creates an ft.ElevatedButton compatible with modern Flet (content=Control)
-    and legacy Flet (text=str).
-    """
+    """Creates an ft.ElevatedButton compatible with modern Flet and legacy Flet."""
     if ft is None:
         return None
 
@@ -206,10 +193,7 @@ def create_outlined_button(
     on_click: Optional[Callable[[Any], None]] = None,
     tooltip: Optional[str] = None,
 ) -> Any:
-    """
-    Creates an ft.OutlinedButton compatible with modern Flet (content=Control)
-    and legacy Flet (text=str).
-    """
+    """Creates an ft.OutlinedButton compatible with modern Flet and legacy Flet."""
     if ft is None:
         return None
 
@@ -258,6 +242,106 @@ def create_nav_destination(
         selected_icon=selected_icon_data,
         label=label,
     )
+
+
+def create_bottom_nav_destination(
+    icon_name: str,
+    label: str,
+    selected_icon_name: Optional[str] = None,
+) -> Any:
+    """Creates an ft.NavigationDestination control compatible across all Flet versions."""
+    if ft is None:
+        return None
+
+    icon_data = get_icon(icon_name)
+    selected_icon_data = get_icon(selected_icon_name) if selected_icon_name else icon_data
+
+    DestClass = getattr(ft, "NavigationDestination", None)
+    if not DestClass:
+        DestClass = getattr(ft, "NavigationBarDestination", None)
+
+    if DestClass:
+        try:
+            return DestClass(
+                icon=icon_data,
+                selected_icon=selected_icon_data,
+                label=label,
+            )
+        except Exception:
+            try:
+                return DestClass(icon=icon_data, label=label)
+            except Exception:
+                pass
+    return None
+
+
+def wrap_safe_area(control: Any) -> Any:
+    """Wraps a control in ft.SafeArea for mobile notch, cutout, and system bar accommodation."""
+    if ft is None or control is None:
+        return control
+    SafeAreaClass = getattr(ft, "SafeArea", None)
+    if SafeAreaClass:
+        try:
+            return SafeAreaClass(content=control, expand=True)
+        except Exception:
+            pass
+    return control
+
+
+def open_dialog_compat(page: Any, dialog: Any) -> None:
+    """Cross-version helper to display an AlertDialog on the active Page."""
+    if not page or not dialog:
+        return
+    if hasattr(page, "open"):
+        try:
+            page.open(dialog)
+            return
+        except Exception:
+            pass
+    if hasattr(page, "open_dialog"):
+        try:
+            page.open_dialog(dialog)
+            return
+        except Exception:
+            pass
+    if hasattr(page, "show_dialog"):
+        try:
+            page.show_dialog(dialog)
+            return
+        except Exception:
+            pass
+
+    page.dialog = dialog
+    dialog.open = True
+    page.update()
+
+
+def close_dialog_compat(page: Any, dialog: Any) -> None:
+    """Cross-version helper to dismiss an AlertDialog from the active Page."""
+    if not page:
+        return
+    if hasattr(page, "close"):
+        try:
+            page.close(dialog)
+            return
+        except Exception:
+            pass
+    if hasattr(page, "close_dialog"):
+        try:
+            page.close_dialog()
+            return
+        except Exception:
+            pass
+    if hasattr(page, "pop_dialog"):
+        try:
+            page.pop_dialog()
+            return
+        except Exception:
+            pass
+
+    if hasattr(page, "dialog") and page.dialog:
+        page.dialog.open = False
+        page.update()
 
 
 def pad_all(val: Union[int, float]) -> Any:

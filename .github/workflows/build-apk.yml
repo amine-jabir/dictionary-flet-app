@@ -8,11 +8,12 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-apk:
+  build:
+    name: Build APK
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout Source Code
         uses: actions/checkout@v4
 
       - name: Set up Python 3.11
@@ -27,33 +28,24 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Set up Flutter (Pinned for Flet 0.86.x)
-        uses: subosito/flutter-action@v2
+      - name: Set up Flutter 3.44.8
+        uses: actions/subosito/flutter-action@v2
         with:
           flutter-version: '3.44.8'
           channel: 'stable'
-          cache: true
 
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Ensure Clean Workspace
+      - name: Build Android APK
         run: |
-          rm -f test*.db
-          rm -rf build dist __pycache__ agent_sandbox
+          flet build apk --yes
 
-      - name: Build Android APK with Flet
-        run: |
-          flet build apk --project "Dictionary App" --org com.dictionary.app --yes --verbose
-
-      - name: Upload APK as Artifact
+      - name: Upload Android APK
         uses: actions/upload-artifact@v4
         with:
-          name: Dictionary-App-APK
+          name: dictionary-release-apk
           path: build/apk/*.apk
-          retention-days: 14
+          if-no-files-found: ignore

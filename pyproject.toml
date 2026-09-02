@@ -46,3 +46,10 @@ org = "com.dictionary"
 product_name = "Dictionary"
 company_name = "Dictionary App"
 copyright = "Copyright (c) 2026"
+
+[tool.flet.android]
+permissions = [
+    "android.permission.INTERNET",
+    "android.permission.ACCESS_NETWORK_STATE",
+    "android.permission.MODIFY_AUDIO_SETTINGS",
+]
