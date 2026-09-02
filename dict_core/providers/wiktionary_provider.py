@@ -51,23 +51,22 @@ class WiktionaryProvider(BaseDictionaryProvider):
         return self.client is not None
 
     def _clean_html(self, raw_html: str) -> str:
-        """Strips HTML tags, unescapes entities, and collapses redundant whitespace."""
+        """Strips HTML tags, style/script blocks, CSS classes, unescapes entities, and collapses whitespace."""
         if not raw_html or not isinstance(raw_html, str):
             return ""
-        # 1. Replace line breaks and block elements with space
-        text = re.sub(
-            r"<(br|p|/p|div|/div|li|/li|dd|/dd|dt|/dt)[^>]*>",
-            " ",
-            raw_html,
-            flags=re.IGNORECASE,
-        )
-        # 2. Strip any remaining inline tags
-        text = re.sub(r"<[^>]+>", "", text)
-        # 3. Unescape HTML entities (&quot;, &amp;, etc.)
+        # 1. Remove style and script blocks entirely (including their contents)
+        text = re.sub(r'<(style|script)[^>]*>.*?</>', '', raw_html, flags=re.IGNORECASE | re.DOTALL)
+        # 2. Replace block tags and line breaks with space
+        text = re.sub(r'<(br|p|/p|div|/div|li|/li|dd|/dd|dt|/dt)[^>]*>', ' ', text, flags=re.IGNORECASE)
+        # 3. Strip any remaining inline tags
+        text = re.sub(r'<[^>]+>', '', text)
+        # 4. Strip any residual CSS selectors, rules, or MediaWiki stylesheet artifacts
+        text = re.sub(r'(\.|)?mw-parser-output[^{]*(\{[^}]*\}?)?', '', text)
+        text = re.sub(r'\{[^}]*\}', '', text)
+        # 5. Unescape HTML entities (&quot;, &amp;, etc.)
         unescaped = html.unescape(text)
-        # 4. Normalize multiple whitespace and newlines
-        cleaned = re.sub(r"\s+", " ", unescaped).strip()
-        return cleaned
+        # 6. Normalize multiple whitespace and newlines
+        return re.sub(r'\s+', ' ', unescaped).strip()
 
     def lookup(
         self,

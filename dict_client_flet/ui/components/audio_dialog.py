@@ -31,7 +31,7 @@ def show_audio_diagnostics_dialog(
     state: AppState,
     palette: ColorPalette,
 ) -> None:
-    """Displays the comprehensive interactive audio diagnostics dialog with mobile-responsive layout."""
+    """Displays the interactive audio diagnostics dialog with mobile-safe layout."""
     default_test_val = state.current_entry.word if state.current_entry else "hello"
 
     test_input = ft.TextField(
@@ -39,17 +39,17 @@ def show_audio_diagnostics_dialog(
         label="Test Word or Audio URL",
         hint_text="Enter a word (e.g. 'hello') or direct MP3 URL...",
         text_size=13,
-        expand=True,
+        autofocus=False,
     )
 
     log_display = ft.TextField(
         value=state.audio_diagnostic_text or "Click 'Run Diagnostics' below to inspect the audio pipeline...",
-        label="Diagnostic Log Output (Selectable & Copyable)",
+        label="Diagnostic Log Output",
         multiline=True,
         read_only=True,
         text_size=11,
         min_lines=6,
-        max_lines=12,
+        max_lines=10,
         text_style=ft.TextStyle(font_family="monospace"),
     )
 
@@ -132,7 +132,7 @@ def show_audio_diagnostics_dialog(
 
     def on_test_tts(_):
         val = test_input.value.strip() or default_test_val
-        status_label.value = f"🗣️ Speaking '{val}' via System Voice (TTS)..."
+        status_label.value = f"🗣️ Speaking '{val}' via Voice..."
         status_label.color = palette.primary
         safe_page_update()
         state.speak_tts(val)
@@ -147,44 +147,40 @@ def show_audio_diagnostics_dialog(
         close_dialog_compat(page, dialog)
 
     page_width = getattr(page, "width", 400) or 400
-    dialog_width = min(max(page_width - 32, 280), 560)
+    dialog_width = min(max(page_width - 32, 280), 540)
+
+    run_btn = create_elevated_button(
+        text="Run Diagnostics",
+        icon_name="SEARCH",
+        on_click=on_run_diag,
+        bgcolor=palette.primary,
+        color="#FFFFFF",
+    )
+    play_btn = create_outlined_button(
+        text="Play Stream",
+        icon_name="VOLUME_UP",
+        on_click=on_test_play,
+    )
+    voice_btn = create_outlined_button(
+        text="Test Voice (TTS)",
+        icon_name="RECORD_VOICE_OVER",
+        on_click=on_test_tts,
+    )
+    copy_btn = create_outlined_button(
+        text="Copy Log",
+        icon_name="CONTENT_COPY",
+        on_click=on_copy,
+    )
+
+    action_buttons = [b for b in [run_btn, play_btn, voice_btn, copy_btn] if b is not None]
 
     dialog_content = ft.Container(
         content=ft.Column(
             controls=[
+                test_input,
                 ft.Row(
-                    controls=[
-                        test_input,
-                        create_elevated_button(
-                            text="Run Diagnostics",
-                            icon_name="SEARCH",
-                            on_click=on_run_diag,
-                            bgcolor=palette.primary,
-                            color="#FFFFFF",
-                        ),
-                    ],
-                    spacing=8,
-                    wrap=True,
-                ),
-                ft.Row(
-                    controls=[
-                        create_outlined_button(
-                            text="Play Stream",
-                            icon_name="VOLUME_UP",
-                            on_click=on_test_play,
-                        ),
-                        create_outlined_button(
-                            text="Test Voice (TTS)",
-                            icon_name="RECORD_VOICE_OVER",
-                            on_click=on_test_tts,
-                        ),
-                        create_outlined_button(
-                            text="Copy Log",
-                            icon_name="CONTENT_COPY",
-                            on_click=on_copy,
-                        ),
-                    ],
-                    spacing=8,
+                    controls=action_buttons,
+                    spacing=6,
                     wrap=True,
                 ),
                 ft.Container(
@@ -199,7 +195,7 @@ def show_audio_diagnostics_dialog(
             scroll=ft.ScrollMode.AUTO,
         ),
         width=dialog_width,
-        padding=pad_all(8),
+        padding=pad_all(6),
     )
 
     dialog = ft.AlertDialog(

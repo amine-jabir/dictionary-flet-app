@@ -1,5 +1,6 @@
 """
 Reusable search bar component with clear button, submit action, and clean rounded styling.
+Configured with autofocus=False to prevent virtual software keyboard from popping up on launch.
 """
 
 from typing import Callable, Optional
@@ -21,7 +22,7 @@ def build_search_bar(
     initial_query: str = "",
     palette: ColorPalette = None,  # type: ignore
 ) -> ft.Container:
-    """Builds a modern search bar widget with cancellation/clearing support."""
+    """Builds a modern search bar widget without automatic autofocus to prevent unwanted keyboard popups."""
     text_input = ft.TextField(
         value=initial_query,
         hint_text="Search a word (e.g. serendipity, lucid, resilience)...",
@@ -29,7 +30,7 @@ def build_search_bar(
         border=ft.InputBorder.NONE,
         content_padding=pad_symmetric(horizontal=16, vertical=12),
         text_size=15,
-        autofocus=True,
+        autofocus=False,
         expand=True,
         on_submit=lambda e: on_search(e.control.value),
     )
@@ -38,7 +39,6 @@ def build_search_bar(
         text_input.value = ""
         try:
             text_input.update()
-            text_input.focus()
         except Exception:
             pass
         if on_clear:

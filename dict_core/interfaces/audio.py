@@ -1,6 +1,6 @@
 """
 Audio player interface and platform-native playback engines for dict_core.
-Provides cross-platform audio pronunciation playback across Windows, macOS, Linux, and headless environments.
+Provides cross-platform audio pronunciation playback across Windows, macOS, Linux, and Android.
 Supports recorded audio files (MP3/OGG/WAV) and text-to-speech (TTS) fallback.
 """
 
@@ -10,6 +10,7 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -40,10 +41,10 @@ class BaseAudioPlayer(ABC):
         on_error: Optional[Callable[[Exception], None]] = None,
     ) -> None:
         """
-        Plays an audio file from a local path.
+        Plays an audio file from a local path or URL.
         
         Args:
-            audio_path: Local filesystem path to the audio file.
+            audio_path: Local filesystem path or URL to the audio file.
             on_complete: Optional callback invoked when playback finishes.
             on_error: Optional callback invoked if playback fails.
         """
@@ -100,7 +101,7 @@ class NullAudioPlayer(BaseAudioPlayer):
 class PlatformAudioPlayer(BaseAudioPlayer):
     """
     Cross-platform native audio player supporting Windows (winmm.dll MCI / WPF / PowerShell / winsound),
-    macOS (afplay), and Linux (paplay/aplay/ffplay/mpv/mpg123).
+    macOS (afplay), Linux (paplay/aplay/ffplay/mpv/mpg123), and Android detection.
     Supports fallback text-to-speech pronunciation for words without audio recordings.
     Executes playback asynchronously in a background thread to prevent UI freezing.
     """
@@ -114,6 +115,9 @@ class PlatformAudioPlayer(BaseAudioPlayer):
     @property
     def player_name(self) -> str:
         system = platform.system().lower()
+        is_android = hasattr(sys, "getandroidapilevel") or "ANDROID_ROOT" in os.environ or "ANDROID_DATA" in os.environ
+        if is_android:
+            return "Android Platform (audioplayers / Flet Audio)"
         if "windows" in system:
             return "Windows Native Player (MCI winmm.dll / WPF MediaPlayer / PowerShell)"
         elif "darwin" in system:
@@ -123,11 +127,18 @@ class PlatformAudioPlayer(BaseAudioPlayer):
     def get_system_diagnostics(self) -> Dict[str, Any]:
         """Returns diagnostic details on available system audio backends."""
         system = platform.system().lower()
+        is_android = hasattr(sys, "getandroidapilevel") or "ANDROID_ROOT" in os.environ or "ANDROID_DATA" in os.environ
+
         diag = {
-            "os": platform.system(),
+            "os": "Android" if is_android else platform.system(),
             "os_release": platform.release(),
             "available_backends": [],
         }
+
+        if is_android:
+            diag["available_backends"].append("Android Flutter Audio Engine (audioplayers / Flet Audio)")
+            diag["available_backends"].append("Online TTS Audio Stream (HTTPS)")
+            return diag
 
         if "windows" in system:
             try:
@@ -177,7 +188,6 @@ class PlatformAudioPlayer(BaseAudioPlayer):
             # Open with type mpegvideo (supports MP3, WAV, WMA)
             ret = winmm.mciSendStringW(f'open "{abs_path}" type mpegvideo alias {alias}', None, 0, 0)
             if ret != 0:
-                # Try generic open
                 ret = winmm.mciSendStringW(f'open "{abs_path}" alias {alias}', None, 0, 0)
 
             if ret == 0:
@@ -191,7 +201,7 @@ class PlatformAudioPlayer(BaseAudioPlayer):
         except Exception as exc:
             logger.debug("winmm.dll MCI playback failed: %s", exc)
 
-        # 2. Try PowerShell WPF MediaPlayer (standard in .NET on Windows)
+        # 2. Try PowerShell WPF MediaPlayer
         ps_wpf = (
             f"Add-Type -AssemblyName presentationCore; "
             f"$p = New-Object System.Windows.Media.MediaPlayer; "
@@ -265,6 +275,10 @@ class PlatformAudioPlayer(BaseAudioPlayer):
 
     def _play_linux(self, audio_path: str) -> None:
         """Plays audio on Linux using available CLI audio tools."""
+        is_android = hasattr(sys, "getandroidapilevel") or "ANDROID_ROOT" in os.environ or "ANDROID_DATA" in os.environ
+        if is_android:
+            raise RuntimeError("Direct Linux CLI audio utilities unavailable on Android. Use FletAudioPlayer (ft.Audio).")
+
         abs_path = str(Path(audio_path).resolve())
         for player_cmd in ["paplay", "aplay", "ffplay", "mpv", "mpg123"]:
             if shutil.which(player_cmd):
@@ -294,8 +308,11 @@ class PlatformAudioPlayer(BaseAudioPlayer):
         def _tts_worker() -> None:
             self._playing = True
             system = platform.system().lower()
+            is_android = hasattr(sys, "getandroidapilevel") or "ANDROID_ROOT" in os.environ or "ANDROID_DATA" in os.environ
             try:
-                if "windows" in system:
+                if is_android:
+                    raise RuntimeError("Native Linux speech commands unavailable on Android. Use TTS audio stream.")
+                elif "windows" in system:
                     ps_tts = (
                         f"Add-Type -AssemblyName System.Speech; "
                         f"$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
@@ -313,11 +330,15 @@ class PlatformAudioPlayer(BaseAudioPlayer):
                     subprocess.run(["say", clean_text], capture_output=True, timeout=8, check=True)
                     self.last_backend_used = "macOS say (TTS)"
                 else:
+                    tts_found = False
                     for tts_cmd in ["spd-say", "espeak", "festival"]:
                         if shutil.which(tts_cmd):
                             subprocess.run([tts_cmd, clean_text], capture_output=True, timeout=8, check=True)
                             self.last_backend_used = f"Linux {tts_cmd} (TTS)"
+                            tts_found = True
                             break
+                    if not tts_found:
+                        raise RuntimeError("No Linux TTS engine found (spd-say, espeak, festival).")
 
                 self._playing = False
                 if on_complete and not self._stop_requested:

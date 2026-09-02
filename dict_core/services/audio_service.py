@@ -284,7 +284,7 @@ class AudioService:
 
         # 4. Inspect Audio Player Driver
         log(f"Step 4: Inspecting Audio Player engine ({self.player.player_name})...")
-        if isinstance(self.player, PlatformAudioPlayer):
+        if hasattr(self.player, "get_system_diagnostics"):
             sys_diag = self.player.get_system_diagnostics()
             result["system_diagnostics"] = sys_diag
             log(f"System Audio Backends Available: {', '.join(sys_diag['available_backends'])}")
