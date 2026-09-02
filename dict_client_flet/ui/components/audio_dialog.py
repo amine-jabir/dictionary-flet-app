@@ -7,6 +7,7 @@ Responsive for both mobile (narrow viewports) and desktop displays.
 
 import threading
 from typing import Any, Optional
+import urllib.parse
 import flet as ft
 
 from dict_client_flet.state.app_state import AppState
@@ -150,6 +151,31 @@ def show_audio_diagnostics_dialog(
             status_label.value = f"Voice notice: {exc}"
             safe_page_update()
 
+    def on_open_external(_):
+        try:
+            val = test_input.value.strip() or default_test_val
+            url = None
+            if val.startswith("http://") or val.startswith("https://"):
+                url = val
+            else:
+                url = state.audio_service.resolve_audio_url(val)
+                if not url:
+                    encoded = urllib.parse.quote(val)
+                    url = f"https://translate.google.com/translate_tts?ie=UTF-8&tl=en&client=tw-ob&q={encoded}"
+            if url:
+                if hasattr(page, "launch_url"):
+                    page.launch_url(url)
+                    status_label.value = "🌐 Opening audio URL in external browser/player..."
+                    status_label.color = palette.success
+                else:
+                    status_label.value = f"URL: {url}"
+            else:
+                status_label.value = "Could not resolve audio URL."
+            safe_page_update()
+        except Exception as exc:
+            status_label.value = f"Launch notice: {exc}"
+            safe_page_update()
+
     def on_copy(_):
         try:
             set_clipboard_compat(page, log_display.value)
@@ -186,13 +212,18 @@ def show_audio_diagnostics_dialog(
         icon_name="RECORD_VOICE_OVER",
         on_click=on_test_tts,
     )
+    open_btn = create_outlined_button(
+        text="Open in Browser",
+        icon_name="OPEN_IN_BROWSER",
+        on_click=on_open_external,
+    )
     copy_btn = create_outlined_button(
         text="Copy Log",
         icon_name="CONTENT_COPY",
         on_click=on_copy,
     )
 
-    action_buttons = [b for b in [run_btn, play_btn, voice_btn, copy_btn] if b is not None]
+    action_buttons = [b for b in [run_btn, play_btn, voice_btn, open_btn, copy_btn] if b is not None]
 
     dialog_content = ft.Container(
         content=ft.Column(
