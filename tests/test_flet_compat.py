@@ -105,3 +105,21 @@ class TestFletCompat(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_audio_helpers(self) -> None:
+        from dict_client_flet.ui.flet_compat import get_audio_class, is_audio_control
+        self.assertFalse(is_audio_control(None))
+        self.assertFalse(is_audio_control("string"))
+
+    def test_set_clipboard_compat_modern_and_legacy(self) -> None:
+        from dict_client_flet.ui.flet_compat import set_clipboard_compat
+        
+        # Test modern page.clipboard
+        mock_modern = MagicMock()
+        set_clipboard_compat(mock_modern, "clip_modern")
+        self.assertEqual(mock_modern.clipboard, "clip_modern")
+
+        # Test legacy page.set_clipboard
+        mock_legacy = MagicMock(spec=["update", "set_clipboard"])
+        set_clipboard_compat(mock_legacy, "clip_legacy")
+        mock_legacy.set_clipboard.assert_called_once_with("clip_legacy")

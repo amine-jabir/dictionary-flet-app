@@ -1,8 +1,8 @@
 """
 Cross-platform Audio Player for the Flet client.
-Integrates Flet's ft.Audio control for mobile (Android/iOS) and web with
-native OS fallback playback (Windows, macOS, Linux). Supports live pronunciation
-playback and Text-to-Speech (TTS).
+Integrates Flet's Audio control (via flet_audio / flet.Audio) for mobile (Android/iOS)
+and web with native OS fallback playback (Windows, macOS, Linux).
+Supports live pronunciation playback and Text-to-Speech (TTS).
 """
 
 import base64
@@ -15,6 +15,7 @@ from typing import Any, Callable, Dict, Optional
 import urllib.parse
 import flet as ft
 
+from dict_client_flet.ui.flet_compat import get_audio_class, is_audio_control
 from dict_core.interfaces.audio import BaseAudioPlayer, PlatformAudioPlayer
 from dict_core.utils.logger import get_logger
 
@@ -23,16 +24,16 @@ logger = get_logger("dict_client.audio_player")
 
 class FletAudioPlayer(BaseAudioPlayer):
     """
-    Cross-platform audio player engine combining Flet's ft.Audio control
+    Cross-platform audio player engine combining Flet Audio control
     with native OS multimedia fallbacks.
     """
 
     def __init__(self, page: Optional[ft.Page] = None) -> None:
         self.page = page
         self._native_player = PlatformAudioPlayer()
-        self._audio_control: Optional[ft.Audio] = None
+        self._audio_control: Any = None
         self._playing = False
-        self._last_backend = "Flet ft.Audio"
+        self._last_backend = "Flet Audio"
 
     def set_page(self, page: ft.Page) -> None:
         """Attaches the active Flet Page."""
@@ -49,12 +50,16 @@ class FletAudioPlayer(BaseAudioPlayer):
     def get_system_diagnostics(self) -> Dict[str, Any]:
         """Returns diagnostics on the Flet audio pipeline and underlying platform drivers."""
         native_diag = self._native_player.get_system_diagnostics()
+        AudioClass = get_audio_class()
         diag = {
             "player_engine": "FletAudioPlayer",
             "has_page_attached": self.page is not None,
+            "flet_audio_class_available": AudioClass is not None,
             "flet_audio_mounted": self._audio_control is not None,
             "last_backend_used": self.last_backend_used,
-            "available_backends": ["Flet ft.Audio (Android / iOS / Desktop Cross-Platform)"],
+            "available_backends": [
+                f"Flet Audio ({'Available' if AudioClass else 'Missing flet_audio'})"
+            ],
         }
         for b in native_diag.get("available_backends", []):
             if b not in diag["available_backends"]:
@@ -109,12 +114,14 @@ class FletAudioPlayer(BaseAudioPlayer):
         on_complete: Optional[Callable[[], None]] = None,
         on_error: Optional[Callable[[Exception], None]] = None,
     ) -> None:
-        """Plays audio stream or file using Flet's ft.Audio engine, with native OS fallback."""
+        """Plays audio stream or file using Flet's Audio engine, with native OS fallback."""
         self.stop()
         self._playing = True
 
-        # 1. Attempt playback via Flet ft.Audio (Primary for Mobile / Android / Cross-Platform)
-        if self.page and hasattr(self.page, "overlay"):
+        AudioClass = get_audio_class()
+
+        # 1. Attempt playback via Flet Audio (Primary for Mobile / Android / Cross-Platform)
+        if self.page and hasattr(self.page, "overlay") and AudioClass is not None:
             try:
                 if self._audio_control:
                     try:
@@ -127,7 +134,7 @@ class FletAudioPlayer(BaseAudioPlayer):
                 try:
                     self.page.overlay = [
                         c for c in self.page.overlay
-                        if not (isinstance(c, ft.Audio) or c.__class__.__name__ == "Audio")
+                        if not is_audio_control(c)
                     ]
                 except Exception:
                     pass
@@ -144,7 +151,7 @@ class FletAudioPlayer(BaseAudioPlayer):
 
                 # Handle remote URL vs local audio file
                 if audio_path.startswith("http://") or audio_path.startswith("https://"):
-                    self._audio_control = ft.Audio(
+                    self._audio_control = AudioClass(
                         src=audio_path,
                         autoplay=True,
                         volume=1.0,
@@ -155,7 +162,7 @@ class FletAudioPlayer(BaseAudioPlayer):
                     if file_p.exists() and file_p.stat().st_size > 0:
                         with open(file_p, "rb") as af:
                             b64_str = base64.b64encode(af.read()).decode("ascii")
-                        self._audio_control = ft.Audio(
+                        self._audio_control = AudioClass(
                             src_base64=b64_str,
                             autoplay=True,
                             volume=1.0,
@@ -173,14 +180,13 @@ class FletAudioPlayer(BaseAudioPlayer):
                 except Exception:
                     pass
 
-                self._last_backend = "Flet ft.Audio (Cross-Platform)"
-                logger.info("[AUDIO PLAYER] Dispatched via Flet ft.Audio for %s", audio_path)
+                self._last_backend = "Flet Audio (Flutter audioplayers)"
+                logger.info("[AUDIO PLAYER] Dispatched via Flet Audio for %s", audio_path)
                 return
 
             except Exception as exc:
-                logger.warning("Flet ft.Audio dispatch error (%s), attempting native fallback...", exc)
+                logger.warning("Flet Audio dispatch error (%s), attempting native fallback...", exc)
                 if self.is_mobile_or_android():
-                    # On Android/mobile, do not call desktop CLI player
                     self._playing = False
                     if on_error:
                         on_error(exc)
@@ -215,7 +221,8 @@ class FletAudioPlayer(BaseAudioPlayer):
                     raise
         else:
             self._playing = False
-            err = RuntimeError("No active Page overlay available for audio playback.")
+            msg = "Audio playback component (flet_audio) is missing or could not initialize overlay."
+            err = RuntimeError(msg)
             if on_error:
                 on_error(err)
             else:

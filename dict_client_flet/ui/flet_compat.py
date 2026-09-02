@@ -483,3 +483,65 @@ def close_dialog_compat(page: Any, dialog: Any) -> None:
     if hasattr(page, "dialog") and page.dialog:
         page.dialog.open = False
         page.update()
+
+
+def get_audio_class() -> Any:
+    """Resolves the Audio control class across all Flet versions and flet_audio extensions."""
+    try:
+        import flet_audio as fta
+        if hasattr(fta, "Audio"):
+            return fta.Audio
+    except ImportError:
+        pass
+    try:
+        from flet import Audio
+        return Audio
+    except (ImportError, AttributeError):
+        pass
+    try:
+        import flet as ft
+        return getattr(ft, "Audio", None)
+    except Exception:
+        pass
+    return None
+
+
+def is_audio_control(control: Any) -> bool:
+    """Checks whether a control is an Audio control instance without triggering AttributeErrors."""
+    if control is None:
+        return False
+    if getattr(control, "__class__", None) and control.__class__.__name__ == "Audio":
+        return True
+    AudioClass = get_audio_class()
+    if AudioClass and isinstance(control, AudioClass):
+        return True
+    return False
+
+
+def set_clipboard_compat(page: Any, text: str) -> None:
+    """Sets the system clipboard content across modern (page.clipboard) and legacy (page.set_clipboard) Flet."""
+    if not page:
+        return
+    # 1. Modern Flet: page.clipboard = text
+    try:
+        if hasattr(page, "clipboard"):
+            page.clipboard = text
+            page.update()
+            return
+    except Exception:
+        pass
+
+    # 2. Legacy Flet: page.set_clipboard(text)
+    if hasattr(page, "set_clipboard"):
+        try:
+            page.set_clipboard(text)
+            return
+        except Exception:
+            pass
+
+    # 3. Direct assignment fallback
+    try:
+        page.clipboard = text
+        page.update()
+    except Exception:
+        pass
