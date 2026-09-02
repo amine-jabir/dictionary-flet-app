@@ -48,6 +48,9 @@ product_name = "Dictionary"
 company_name = "Dictionary App"
 copyright = "Copyright (c) 2026"
 
+[tool.flet.flutter]
+dependencies = ["flet_audio"]
+
 [tool.flet.android]
 permissions = [
     "android.permission.INTERNET",
