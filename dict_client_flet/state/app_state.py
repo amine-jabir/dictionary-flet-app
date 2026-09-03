@@ -329,6 +329,8 @@ class AppState:
             self.notify()
             return
 
+        logger.info("[AUDIO] BUTTON CLICK")
+        logger.info("[AUDIO] WORD = %s", self.current_entry.word)
         self._diag(f"EVENT: play_audio -> '{self.current_entry.word}'")
         self.is_audio_playing = True
         self.audio_status_message = "Playing audio..."

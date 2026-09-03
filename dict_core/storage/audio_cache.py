@@ -1,7 +1,7 @@
 """
 Binary audio caching manager for dict_core.
 Manages disk storage of downloaded pronunciation audio files with atomic writes,
-format detection, and SHA-256 hashing.
+format detection, SHA-256 hashing, and payload validation.
 """
 
 import hashlib
@@ -57,7 +57,8 @@ class AudioCacheManager:
 
     def get_cached_path(self, url: str) -> Optional[Path]:
         """
-        Returns the Path to the cached audio file if it exists and is non-empty.
+        Returns the Path to the cached audio file if it exists, is non-empty,
+        and contains legitimate audio rather than an error payload.
         """
         if not url or not isinstance(url, str):
             return None
@@ -69,9 +70,23 @@ class AudioCacheManager:
         matches = list(self.cache_dir.glob(f"audio_{url_hash}.*"))
         if matches:
             file_path = matches[0]
-            if file_path.is_file() and file_path.stat().st_size > 0:
-                return file_path
-            # Corrupted / 0-byte file: remove it
+            if file_path.is_file() and file_path.stat().st_size >= 32:
+                try:
+                    with open(file_path, "rb") as f:
+                        header = f.read(64).strip().lower()
+                    if not (
+                        header.startswith(b"<!doctype")
+                        or header.startswith(b"<html")
+                        or header.startswith(b"<?xml")
+                        or header.startswith(b"{\n")
+                        or header.startswith(b'{"')
+                        or header.startswith(b'{ "')
+                    ):
+                        return file_path
+                except Exception:
+                    pass
+
+            # Corrupted / invalid file: remove it
             file_path.unlink(missing_ok=True)
 
         return None

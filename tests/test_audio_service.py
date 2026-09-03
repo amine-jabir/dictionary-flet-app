@@ -301,5 +301,231 @@ class TestAudioService(unittest.TestCase):
         self.assertFalse(null_player.is_playing())
 
 
+
+import math
+import struct
+import wave
+from dict_client_flet.state.app_state import AppState
+from dict_client_flet.ui.audio_player import FletAudioPlayer
+from dict_core.providers.offline_provider import OfflineDictionaryProvider
+from dict_core.services.lookup_service import LookupService
+from dict_core.storage.cache_repo import CacheRepository
+from dict_core.storage.database import DatabaseManager
+from dict_core.storage.history_repo import HistoryRepository
+from dict_core.storage.vocabulary_repo import VocabularyRepository
+
+
+def _create_valid_wav_sample(filepath: Path, duration_sec: float = 0.3, freq_hz: float = 440.0) -> Path:
+    sample_rate = 22050
+    num_samples = int(sample_rate * duration_sec)
+    with wave.open(str(filepath), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        frames = bytearray()
+        for i in range(num_samples):
+            val = int(16000.0 * math.sin(2.0 * math.pi * freq_hz * (i / sample_rate)))
+            frames.extend(struct.pack("<h", val))
+        wav_file.writeframes(frames)
+    return filepath
+
+
+class TestAudioIsolation(unittest.TestCase):
+    """Three independent forensic isolation tests (Phase 2)."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self.temp_dir.name)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_a_player_only(self) -> None:
+        """TEST A: Player only with known-good audio."""
+        wav_file = _create_valid_wav_sample(self.tmp_path / "known_good.wav")
+        self.assertTrue(wav_file.exists())
+        self.assertGreater(wav_file.stat().st_size, 500)
+
+        completed = []
+        mock_driver = CustomMockPlayer()
+        mock_driver.play(
+            str(wav_file),
+            on_complete=lambda: completed.append(True),
+        )
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(mock_driver.played_files, [str(wav_file)])
+
+        # Test FletAudioPlayer wrapping driver
+        mock_page = MagicMock()
+        flet_player = FletAudioPlayer(mock_page)
+        flet_completed = []
+        flet_player.play(str(wav_file), on_complete=lambda: flet_completed.append(True))
+        self.assertIsNotNone(flet_player.player_name)
+
+    def test_b_dictionary_audio_only(self) -> None:
+        """TEST B: Dictionary provider -> audio URL -> player."""
+        provider = OfflineDictionaryProvider()
+        entry = provider.lookup("duck")
+        audio_url = entry.primary_audio_url
+        self.assertIsNotNone(audio_url)
+        self.assertTrue(audio_url.startswith("http://") or audio_url.startswith("https://"))
+
+        player_received = []
+
+        class DirectTestPlayer(BaseAudioPlayer):
+            @property
+            def player_name(self) -> str:
+                return "DirectTestPlayer"
+            def play(self, audio_path, on_complete=None, on_error=None):
+                player_received.append(audio_path)
+                if on_complete:
+                    on_complete()
+            def stop(self):
+                pass
+            def is_playing(self):
+                return False
+
+        player = DirectTestPlayer()
+        player.play(audio_url)
+        self.assertEqual(len(player_received), 1)
+        self.assertEqual(player_received[0], audio_url)
+
+    def test_c_complete_application_flow(self) -> None:
+        """TEST C: Click speaker -> WordEntry -> AudioService -> Player."""
+        db = DatabaseManager(":memory:")
+        cache_repo = CacheRepository(db)
+        history_repo = HistoryRepository(db)
+        vocab_repo = VocabularyRepository(db)
+        offline_provider = OfflineDictionaryProvider()
+
+        lookup_service = LookupService(
+            provider=offline_provider,
+            cache_repo=cache_repo,
+            history_repo=history_repo,
+            offline_provider=offline_provider,
+        )
+
+        audio_cache = AudioCacheManager(cache_dir=self.tmp_path / "audio_cache")
+        mock_http = MagicMock()
+
+        valid_wav = _create_valid_wav_sample(self.tmp_path / "stream.wav")
+        with open(valid_wav, "rb") as f:
+            wav_bytes = f.read()
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.content = wav_bytes
+        mock_resp.headers = {"Content-Type": "audio/wav"}
+        mock_http.get.return_value = mock_resp
+
+        pipeline_plays = []
+
+        class PipelinePlayer(BaseAudioPlayer):
+            @property
+            def player_name(self) -> str:
+                return "PipelinePlayer"
+            def play(self, audio_path, on_complete=None, on_error=None):
+                pipeline_plays.append(audio_path)
+                if on_complete:
+                    on_complete()
+            def stop(self):
+                pass
+            def is_playing(self):
+                return False
+
+        player = PipelinePlayer()
+        audio_service = AudioService(
+            cache_manager=audio_cache,
+            http_client=mock_http,
+            player=player,
+        )
+
+        state = AppState(
+            lookup_service=lookup_service,
+            audio_service=audio_service,
+            vocab_repo=vocab_repo,
+            history_repo=history_repo,
+            debug_diagnostics=True,
+        )
+
+        # 1. Search
+        state.search_word("duck", run_sync=True)
+        self.assertEqual(state.current_entry.word, "duck")
+
+        # 2. Click Speaker
+        state.play_audio(run_sync=True)
+
+        # 3. Verify
+        self.assertEqual(len(pipeline_plays), 1)
+        self.assertTrue(Path(pipeline_plays[0]).exists())
+        self.assertFalse(state.is_audio_playing)
+        self.assertIn("Played audio", state.audio_status_message)
+        db.close()
+
+
+class TestAudioPhase8ErrorCases(unittest.TestCase):
+    """Phase 8 error and resilience tests."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self.temp_dir.name)
+        self.cache = AudioCacheManager(cache_dir=self.tmp_path / "cache")
+        self.mock_http = MagicMock()
+        self.mock_player = NullAudioPlayer()
+        self.service = AudioService(
+            cache_manager=self.cache,
+            http_client=self.mock_http,
+            player=self.mock_player,
+        )
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_zero_byte_and_corrupt_cache_purged(self) -> None:
+        url = "https://api.dev/corrupt.mp3"
+        fname = self.cache._get_filename_for_url(url)
+        target = self.cache.cache_dir / fname
+
+        # 0 bytes
+        target.write_bytes(b"")
+        self.assertIsNone(self.cache.get_cached_path(url))
+        self.assertFalse(target.exists())
+
+        # HTML content
+        target.write_bytes(b"<!doctype html><html>404</html>")
+        self.assertIsNone(self.cache.get_cached_path(url))
+        self.assertFalse(target.exists())
+
+    def test_html_error_payload_rejected(self) -> None:
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.content = b"<!DOCTYPE html><html><body>Error</body></html>"
+        resp.headers = {"Content-Type": "text/html"}
+        self.mock_http.get.return_value = resp
+        with self.assertRaises(AudioError):
+            self.service.get_audio_file("https://api.dev/html.mp3")
+
+    def test_json_error_payload_rejected(self) -> None:
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.content = b'{"error": "not found"}'
+        resp.headers = {"Content-Type": "application/json"}
+        self.mock_http.get.return_value = resp
+        with self.assertRaises(AudioError):
+            self.service.get_audio_file("https://api.dev/json.mp3")
+
+    def test_http_404_rejected(self) -> None:
+        resp = MagicMock()
+        resp.status_code = 404
+        resp.content = b""
+        self.mock_http.get.return_value = resp
+        with self.assertRaises(AudioError):
+            self.service.get_audio_file("https://api.dev/404.mp3")
+
+    def test_timeout_rejected(self) -> None:
+        self.mock_http.get.side_effect = TimeoutError("Connection timeout")
+        with self.assertRaises((AudioError, TimeoutError)):
+            self.service.get_audio_file("https://api.dev/timeout.mp3")
+
 if __name__ == "__main__":
     unittest.main()

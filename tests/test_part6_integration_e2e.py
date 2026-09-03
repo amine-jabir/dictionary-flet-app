@@ -1,3 +1,5 @@
+import tempfile
+from pathlib import Path
 """
 Part 6 End-to-End Integration & Regression Test Suite.
 Tests the complete application workflows:
@@ -86,6 +88,7 @@ class TestPart6EndToEnd(unittest.TestCase):
     """Full End-to-End integration test suite for Part 6."""
 
     def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
         self.db = DatabaseManager(":memory:")
         self.cache_repo = CacheRepository(self.db)
         self.history_repo = HistoryRepository(self.db)
@@ -104,7 +107,7 @@ class TestPart6EndToEnd(unittest.TestCase):
         )
 
         self.mock_http = MagicMock(spec=ResilientHttpClient)
-        self.audio_cache = AudioCacheManager()
+        self.audio_cache = AudioCacheManager(cache_dir=Path(self.temp_dir.name) / "audio_cache")
         self.mock_player = MagicMock()
         self.audio_service = AudioService(
             cache_manager=self.audio_cache,
@@ -125,6 +128,7 @@ class TestPart6EndToEnd(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.db.close()
+        self.temp_dir.cleanup()
 
     def _on_ui_notify(self) -> None:
         self.ui_notifications += 1

@@ -33,9 +33,8 @@ class AudioService:
     ) -> None:
         self.cache = cache_manager or AudioCacheManager()
         self.client = http_client or ResilientHttpClient()
-        # Default to platform native player for real desktop sound
         self.player = player or PlatformAudioPlayer()
-        logger.info("[AUDIO PIPELINE] PLAYER CREATED: %s", self.player.player_name)
+        logger.info("[AUDIO] PLAYER CREATED: %s", self.player.player_name)
 
     def resolve_audio_url(self, source: Union[str, AudioSource, Phonetic, WordEntry]) -> Optional[str]:
         """
@@ -93,7 +92,7 @@ class AudioService:
             or head.startswith(b"<?xml")
             or head.startswith(b"{\n")
             or head.startswith(b'{"')
-            or head.startswith(b"{ \"")
+            or head.startswith(b'{ "')
         ):
             raise AudioError(
                 f"Downloaded response for '{url}' is an HTML/JSON error page, not a binary audio file.",
@@ -111,28 +110,38 @@ class AudioService:
         # 1. Check disk cache
         cached_path = self.cache.get_cached_path(url)
         if cached_path:
-            logger.info("[AUDIO PIPELINE] CACHE HIT: %s (path=%s, size=%d bytes)", url, cached_path.name, cached_path.stat().st_size)
+            logger.info(
+                "[AUDIO] CACHE HIT: %s | Local path: %s | File size: %d bytes | File extension: %s",
+                url, str(cached_path), cached_path.stat().st_size, cached_path.suffix
+            )
             return cached_path
 
         # 2. Download from remote source
-        logger.info("[AUDIO PIPELINE] CACHE MISS: downloading from %s", url)
+        logger.info("[AUDIO] CACHE MISS: downloading from %s", url)
         try:
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
             response = self.client.get(url, timeout=10.0, headers=headers)
+            content_type = response.headers.get("Content-Type", "audio/mpeg")
+            file_size = len(response.content) if response.content else 0
+
+            logger.info(
+                "[AUDIO] HTTP status: %d | Content-Type: %s | File size: %d bytes",
+                response.status_code, content_type, file_size
+            )
+
             if response.status_code != 200 or not response.content:
                 raise AudioError(
                     f"Server returned HTTP {response.status_code} with empty audio content for '{url}'",
                     details={"status_code": response.status_code, "url": url},
                 )
 
-            content_type = response.headers.get("Content-Type", "audio/mpeg")
             self._validate_audio_payload(response.content, content_type=content_type, url=url)
 
             # Save binary content to disk cache atomically
             saved_path = self.cache.save_audio_bytes(url, response.content)
             logger.info(
-                "[AUDIO PIPELINE] FILE CACHED: %s | SIZE: %d bytes | TYPE: %s",
-                str(saved_path), saved_path.stat().st_size, content_type
+                "[AUDIO] FILE CACHED: Local path: %s | File size: %d bytes | File extension: %s",
+                str(saved_path), saved_path.stat().st_size, saved_path.suffix
             )
             return saved_path
 
@@ -149,42 +158,35 @@ class AudioService:
     ) -> Path:
         """
         Resolves/downloads the audio file and triggers playback on the configured player engine.
-        Gracefully falls back to direct URL streaming if Android local caching fails.
         """
-        logger.info("[AUDIO PIPELINE] PLAY REQUEST initiated")
-        resolved_url = None
-        
-        try:
-            resolved_url = self.resolve_audio_url(source)
-            if hasattr(self.player, "set_current_url"):
+        logger.info("[AUDIO] PLAY REQUESTED")
+        resolved_url = self.resolve_audio_url(source)
+        logger.info("[AUDIO] SELECTED URL = %s", resolved_url)
+        logger.info("[AUDIO] PLAYER TYPE = %s", self.player.player_name)
+
+        if hasattr(self.player, "set_current_url"):
+            try:
                 self.player.set_current_url(resolved_url)
-        except Exception:
-            pass
+            except Exception:
+                pass
 
         try:
-            # Attempts to download and cache the MP3 (often fails on Android strict sandboxing)
             local_path = self.get_audio_file(source)
         except Exception as exc:
-            logger.warning("[AUDIO PIPELINE] Local disk cache failed (expected on Android): %s", exc)
-            if resolved_url:
-                logger.info("[AUDIO PIPELINE] Bypassing cache -> streaming directly from URL.")
-                local_path = resolved_url  # Use the web URL as the path instead
-            else:
-                logger.error("[AUDIO PIPELINE] PLAY REQUEST FAILED: No valid URL to fallback on.")
-                if on_error:
-                    on_error(exc)
-                raise
+            logger.error("[AUDIO] PLAY REQUEST FAILED during download/cache: %s", exc)
+            if on_error:
+                on_error(exc)
+            raise
 
-        logger.info("[AUDIO PIPELINE] PLAYER SOURCE SET: %s", str(local_path))
-        logger.info("[AUDIO PIPELINE] PLAYBACK STARTED on %s", self.player.player_name)
+        logger.info("[AUDIO] SOURCE ASSIGNED = %s", str(local_path))
 
         def _wrapped_complete():
-            logger.info("[AUDIO PIPELINE] PLAYBACK COMPLETE: success")
+            logger.info("[AUDIO] PLAYBACK COMPLETE")
             if on_complete:
                 on_complete()
 
         def _wrapped_error(exc: Exception):
-            logger.error("[AUDIO PIPELINE] PLAYBACK ERROR: %s", exc)
+            logger.error("[AUDIO] PLAYBACK ERROR = %s", exc)
             if on_error:
                 on_error(exc)
 
@@ -194,7 +196,7 @@ class AudioService:
                 on_complete=_wrapped_complete,
                 on_error=_wrapped_error,
             )
-            return Path(local_path) if not str(local_path).startswith("http") else local_path
+            return local_path
         except Exception as exc:
             playback_err = AudioPlaybackError(f"Playback failed on player '{self.player.player_name}': {exc}")
             _wrapped_error(playback_err)
@@ -202,7 +204,7 @@ class AudioService:
 
     def stop(self) -> None:
         """Stops active audio playback."""
-        logger.info("[AUDIO PIPELINE] PLAYBACK STOPPED")
+        logger.info("[AUDIO] PLAYBACK STOPPED")
         self.player.stop()
 
     def is_playing(self) -> bool:
@@ -257,7 +259,7 @@ class AudioService:
             result["is_cached"] = True
             result["cache_file_path"] = str(cached_path)
             result["cache_file_size"] = size
-            log(f"Cache HIT: File exists on disk ({cached_path.name}, {size} bytes).")
+            log(f"Cache HIT: File exists on disk ({cached_path.name}, {size} bytes, ext: {cached_path.suffix}).")
         else:
             log("Cache MISS: File not yet cached on disk.")
 
@@ -290,7 +292,7 @@ class AudioService:
                 result["cache_file_path"] = str(saved_path)
                 result["cache_file_size"] = saved_path.stat().st_size
                 result["is_cached"] = True
-                log(f"File atomically persisted to disk cache: {saved_path.name} ({result['cache_file_size']} bytes).")
+                log(f"File atomically persisted to disk cache: {saved_path.name} ({result['cache_file_size']} bytes, ext: {saved_path.suffix}).")
 
             except Exception as exc:
                 log(f"ERROR during download/caching: {exc}")

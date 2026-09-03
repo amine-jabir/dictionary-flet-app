@@ -103,8 +103,7 @@ class TestFletCompat(unittest.TestCase):
         self.assertTrue(res is None or res is not None)
 
 
-if __name__ == "__main__":
-    unittest.main()
+
 
     def test_audio_helpers(self) -> None:
         from dict_client_flet.ui.flet_compat import get_audio_class, is_audio_control
@@ -148,3 +147,7 @@ if __name__ == "__main__":
         self.assertEqual(b.src, "song.mp3")
         self.assertFalse(b.autoplay)
         self.assertEqual(b.volume, 0.5)
+
+
+if __name__ == "__main__":
+    unittest.main()

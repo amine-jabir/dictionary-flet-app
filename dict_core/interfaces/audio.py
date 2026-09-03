@@ -100,8 +100,8 @@ class NullAudioPlayer(BaseAudioPlayer):
 
 class PlatformAudioPlayer(BaseAudioPlayer):
     """
-    Cross-platform native audio player supporting Windows (winmm.dll MCI / WPF / PowerShell / winsound),
-    macOS (afplay), Linux (paplay/aplay/ffplay/mpv/mpg123), and Android detection.
+    Cross-platform native audio player supporting Windows (WMP COM / MCI winmm.dll / winsound),
+    macOS (afplay), Linux (ffplay / mpv / mpg123 / paplay / aplay), and Android detection.
     Supports fallback text-to-speech pronunciation for words without audio recordings.
     Executes playback asynchronously in a background thread to prevent UI freezing.
     """
@@ -111,6 +111,7 @@ class PlatformAudioPlayer(BaseAudioPlayer):
         self._stop_requested = False
         self._active_thread: Optional[threading.Thread] = None
         self.last_backend_used: str = "None"
+        logger.info("[AUDIO] PLAYER CREATED: %s", self.player_name)
 
     @property
     def player_name(self) -> str:
@@ -119,7 +120,7 @@ class PlatformAudioPlayer(BaseAudioPlayer):
         if is_android:
             return "Android Platform (audioplayers / Flet Audio)"
         if "windows" in system:
-            return "Windows Native Player (MCI winmm.dll / WPF MediaPlayer / PowerShell)"
+            return "Windows Native Player (WMP COM / MCI winmm.dll / winsound)"
         elif "darwin" in system:
             return "macOS Native Player (afplay)"
         return "Linux Native Player"
@@ -141,23 +142,23 @@ class PlatformAudioPlayer(BaseAudioPlayer):
             return diag
 
         if "windows" in system:
+            if shutil.which("powershell"):
+                diag["available_backends"].append("PowerShell WMP COM (WMPlayer.OCX)")
+                diag["available_backends"].append("PowerShell Speech Synthesis (TTS)")
             try:
                 import ctypes
                 if hasattr(ctypes, "windll") and hasattr(ctypes.windll, "winmm"):
                     diag["available_backends"].append("Windows MCI (winmm.dll)")
             except Exception:
                 pass
-            if shutil.which("powershell"):
-                diag["available_backends"].append("PowerShell WPF (presentationCore)")
-                diag["available_backends"].append("PowerShell WMP COM (WMPlayer.OCX)")
-                diag["available_backends"].append("PowerShell Speech Synthesis (TTS)")
+            diag["available_backends"].append("Python winsound (WAV)")
         elif "darwin" in system:
             if shutil.which("afplay"):
                 diag["available_backends"].append("macOS afplay")
             if shutil.which("say"):
                 diag["available_backends"].append("macOS say (TTS)")
         else:
-            for cmd in ["paplay", "aplay", "ffplay", "mpv", "mpg123", "cvlc"]:
+            for cmd in ["ffplay", "mpv", "mpg123", "cvlc", "paplay", "aplay"]:
                 if shutil.which(cmd):
                     diag["available_backends"].append(f"Linux {cmd}")
             for tts in ["spd-say", "espeak", "festival"]:
@@ -168,108 +169,93 @@ class PlatformAudioPlayer(BaseAudioPlayer):
 
     def _play_windows(self, audio_path: str) -> None:
         """
-        Plays audio on Windows using multiple redundant native backends:
-        1. winmm.dll MCI (instant C-level call, zero subprocess)
-        2. PowerShell WPF MediaPlayer
-        3. PowerShell WMP COM
-        4. winsound (WAV)
+        Plays audio on Windows using reliable native backends:
+        1. Windows Media Player COM via PowerShell (most reliable for MP3/WAV, works without WPF Dispatcher)
+        2. Windows Multimedia API (winmm.dll) using 8.3 short paths
+        3. Python winsound for WAV files
         """
         abs_path = str(Path(audio_path).resolve())
 
-        # 1. Try Windows Multimedia API (winmm.dll) -> Highest performance, zero subprocesses
+        # 1. Try Windows Media Player COM via PowerShell
+        # Note: WMPlayer.OCX is available on all standard Windows desktop editions and
+        # plays MP3/WAV/AAC asynchronously without needing a WPF Dispatcher frame.
+        if shutil.which("powershell"):
+            ps_wmp = (
+                f"$wmp = New-Object -ComObject WMPlayer.OCX; "
+                f"$wmp.settings.volume = 100; "
+                f"$wmp.URL = '{abs_path}'; "
+                f"$wmp.controls.play(); "
+                f"$t = 0; "
+                f"while ($wmp.playState -ne 3 -and $wmp.playState -ne 1 -and $wmp.playState -ne 8 -and $t -lt 40) {{ "
+                f"  Start-Sleep -Milliseconds 50; $t++ "
+                f"}}; "
+                f"while ($wmp.playState -eq 3 -or $wmp.playState -eq 9 -or $wmp.playState -eq 6) {{ "
+                f"  Start-Sleep -Milliseconds 50 "
+                f"}}; "
+                f"$wmp.close()"
+            )
+            try:
+                logger.info("[AUDIO] Playing via PowerShell WMP COM...")
+                res = subprocess.run(
+                    ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", ps_wmp],
+                    capture_output=True,
+                    timeout=10,
+                )
+                if res.returncode == 0:
+                    self.last_backend_used = "PowerShell WMP COM (WMPlayer.OCX)"
+                    return
+                else:
+                    logger.debug("PowerShell WMP COM returned code %d, stderr: %s", res.returncode, res.stderr)
+            except Exception as exc:
+                logger.debug("PowerShell WMP COM playback failed: %s", exc)
+
+        # 2. Try Windows Multimedia API (winmm.dll) with ShortPathName
         try:
             import ctypes
+            short_path = abs_path
+            try:
+                buf = ctypes.create_unicode_buffer(512)
+                if ctypes.windll.kernel32.GetShortPathNameW(abs_path, buf, 512):
+                    short_path = buf.value
+            except Exception:
+                pass
+
             winmm = ctypes.windll.winmm
             alias = f"dict_audio_{threading.get_ident()}_{int(time.time()*1000) % 10000}"
-            
-            # Close previous if any
             winmm.mciSendStringW(f"close {alias}", None, 0, 0)
-            
-            # Open with type mpegvideo (supports MP3, WAV, WMA)
-            ret = winmm.mciSendStringW(f'open "{abs_path}" type mpegvideo alias {alias}', None, 0, 0)
+
+            ret = winmm.mciSendStringW(f'open "{short_path}" alias {alias}', None, 0, 0)
             if ret != 0:
-                ret = winmm.mciSendStringW(f'open "{abs_path}" alias {alias}', None, 0, 0)
+                ret = winmm.mciSendStringW(f'open "{short_path}" type mpegvideo alias {alias}', None, 0, 0)
 
             if ret == 0:
-                logger.info("[AUDIO DRIVER] Playing via Windows MCI (winmm.dll)...")
+                logger.info("[AUDIO] Playing via Windows MCI (winmm.dll)...")
                 winmm.mciSendStringW(f"play {alias} wait", None, 0, 0)
                 winmm.mciSendStringW(f"close {alias}", None, 0, 0)
                 self.last_backend_used = "Windows MCI (winmm.dll)"
                 return
             else:
-                logger.debug("winmm.dll returned code %d, falling back to WPF...", ret)
+                logger.debug("winmm.dll MCI open returned error code %d", ret)
         except Exception as exc:
             logger.debug("winmm.dll MCI playback failed: %s", exc)
 
-        # 2. Try PowerShell WPF MediaPlayer
-        ps_wpf = (
-            f"Add-Type -AssemblyName presentationCore; "
-            f"$p = New-Object System.Windows.Media.MediaPlayer; "
-            f"$p.Open([System.Uri]'{abs_path}'); "
-            f"$p.Play(); "
-            f"Start-Sleep -Milliseconds 400; "
-            f"$timeout = 0; "
-            f"while ($p.NaturalDuration.HasTimeSpan -and ($p.Position -lt $p.NaturalDuration.TimeSpan) -and $timeout -lt 50) {{ "
-            f"  Start-Sleep -Milliseconds 100; $timeout++ "
-            f"}}; "
-            f"Start-Sleep -Milliseconds 200; "
-            f"$p.Close()"
-        )
-        try:
-            logger.info("[AUDIO DRIVER] Playing via PowerShell WPF MediaPlayer...")
-            res = subprocess.run(
-                ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", ps_wpf],
-                capture_output=True,
-                timeout=8,
-            )
-            if res.returncode == 0:
-                self.last_backend_used = "PowerShell WPF (System.Windows.Media.MediaPlayer)"
-                return
-        except Exception as exc:
-            logger.debug("PowerShell WPF playback failed: %s", exc)
-
-        # 3. Try Windows Media Player COM via PowerShell
-        ps_wmp = (
-            f"$wmp = New-Object -ComObject WMPlayer.OCX; "
-            f"$wmp.settings.volume = 100; "
-            f"$wmp.URL = '{abs_path}'; "
-            f"$wmp.controls.play(); "
-            f"$timeout = 0; "
-            f"while (($wmp.playState -eq 3 -or $wmp.playState -eq 9 -or $wmp.playState -eq 6) -and $timeout -lt 60) {{ "
-            f"  Start-Sleep -Milliseconds 100; $timeout++ "
-            f"}}; "
-            f"Start-Sleep -Milliseconds 300; "
-            f"$wmp.close()"
-        )
-        try:
-            logger.info("[AUDIO DRIVER] Playing via PowerShell WMP COM...")
-            res = subprocess.run(
-                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_wmp],
-                capture_output=True,
-                timeout=8,
-            )
-            if res.returncode == 0:
-                self.last_backend_used = "PowerShell WMP COM (WMPlayer.OCX)"
-                return
-        except Exception as exc:
-            logger.debug("PowerShell WMP COM playback failed: %s", exc)
-
-        # 4. For WAV files, try winsound
+        # 3. For WAV files, try winsound
         if abs_path.lower().endswith(".wav"):
             try:
                 import winsound
-                logger.info("[AUDIO DRIVER] Playing via Python winsound...")
+                logger.info("[AUDIO] Playing via Python winsound...")
                 winsound.PlaySound(abs_path, winsound.SND_FILENAME)
                 self.last_backend_used = "Python winsound"
                 return
             except Exception as exc:
                 logger.debug("winsound playback skipped: %s", exc)
 
-        raise RuntimeError("All Windows native audio backends (MCI, WPF, WMP COM, winsound) failed.")
+        raise RuntimeError("All Windows native audio backends (WMP COM, MCI winmm.dll, winsound) failed.")
 
     def _play_macos(self, audio_path: str) -> None:
         """Plays audio on macOS using afplay."""
         abs_path = str(Path(audio_path).resolve())
+        logger.info("[AUDIO] Playing via macOS afplay: %s", abs_path)
         subprocess.run(["afplay", abs_path], capture_output=True, timeout=6, check=True)
         self.last_backend_used = "macOS afplay"
 
@@ -277,20 +263,36 @@ class PlatformAudioPlayer(BaseAudioPlayer):
         """Plays audio on Linux using available CLI audio tools."""
         is_android = hasattr(sys, "getandroidapilevel") or "ANDROID_ROOT" in os.environ or "ANDROID_DATA" in os.environ
         if is_android:
-            raise RuntimeError("Direct Linux CLI audio utilities unavailable on Android. Use FletAudioPlayer (ft.Audio).")
+            raise RuntimeError("Direct Linux CLI audio utilities unavailable on Android. Use FletAudioPlayer (flet_audio / ft.Audio).")
 
         abs_path = str(Path(audio_path).resolve())
-        for player_cmd in ["paplay", "aplay", "ffplay", "mpv", "mpg123"]:
+        is_wav = abs_path.lower().endswith(".wav")
+
+        # Prioritize tools capable of playing compressed MP3/OGG files
+        candidates = ["ffplay", "mpv", "mpg123", "cvlc"]
+        if is_wav:
+            candidates.extend(["paplay", "aplay"])
+
+        last_err = None
+        for player_cmd in candidates:
             if shutil.which(player_cmd):
-                if player_cmd == "ffplay":
-                    subprocess.run(["ffplay", "-nodisp", "-autoexit", abs_path], capture_output=True, timeout=6, check=True)
-                elif player_cmd == "mpv":
-                    subprocess.run(["mpv", "--no-video", abs_path], capture_output=True, timeout=6, check=True)
-                else:
-                    subprocess.run([player_cmd, abs_path], capture_output=True, timeout=6, check=True)
-                self.last_backend_used = f"Linux {player_cmd}"
-                return
-        raise RuntimeError("No Linux audio playback utility found (mpv, ffplay, paplay, aplay).")
+                try:
+                    logger.info("[AUDIO] Attempting Linux playback via '%s'...", player_cmd)
+                    if player_cmd == "ffplay":
+                        subprocess.run(["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", abs_path], capture_output=True, timeout=6, check=True)
+                    elif player_cmd == "mpv":
+                        subprocess.run(["mpv", "--no-video", "--really-quiet", abs_path], capture_output=True, timeout=6, check=True)
+                    elif player_cmd == "cvlc":
+                        subprocess.run(["cvlc", "--play-and-exit", "--quiet", abs_path], capture_output=True, timeout=6, check=True)
+                    else:
+                        subprocess.run([player_cmd, abs_path], capture_output=True, timeout=6, check=True)
+                    self.last_backend_used = f"Linux {player_cmd}"
+                    return
+                except Exception as exc:
+                    logger.debug("Linux player '%s' failed: %s", player_cmd, exc)
+                    last_err = exc
+
+        raise RuntimeError(f"No functional Linux audio player succeeded (tried: {candidates}). Last error: {last_err}")
 
     def speak_text(
         self,
@@ -345,7 +347,7 @@ class PlatformAudioPlayer(BaseAudioPlayer):
                     on_complete()
             except Exception as exc:
                 self._playing = False
-                logger.error("TTS speech error: %s", exc)
+                logger.error("[AUDIO] TTS speech error: %s", exc)
                 if on_error:
                     on_error(exc)
 
@@ -363,6 +365,7 @@ class PlatformAudioPlayer(BaseAudioPlayer):
         self._playing = True
         system = platform.system().lower()
         try:
+            logger.info("[AUDIO] PLAYBACK STARTED on %s", self.player_name)
             if "windows" in system:
                 self._play_windows(audio_path)
             elif "darwin" in system:
@@ -371,12 +374,13 @@ class PlatformAudioPlayer(BaseAudioPlayer):
                 self._play_linux(audio_path)
 
             self._playing = False
+            logger.info("[AUDIO] PLAYBACK COMPLETE: %s", self.last_backend_used)
             if on_complete and not self._stop_requested:
                 on_complete()
 
         except Exception as exc:
             self._playing = False
-            logger.error("Audio playback error: %s", exc)
+            logger.error("[AUDIO] PLAYBACK ERROR: %s", exc)
             if on_error:
                 on_error(exc)
 
