@@ -6,6 +6,7 @@ Implements dict_core.interfaces.audio.BaseAudioPlayer.
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 import flet as ft
+import flet_audio as fta  # Import the new standalone Flet Audio module
 
 from dict_core.interfaces.audio import BaseAudioPlayer
 from dict_core.utils.logger import get_logger
@@ -15,7 +16,7 @@ logger = get_logger("dict_client.audio_player")
 
 class FletAudioPlayer(BaseAudioPlayer):
     """
-    Flet-native audio player using ft.Audio control.
+    Flet-native audio player using fta.Audio control.
     Supports streaming URLs and local cached files across Android, iOS, Desktop, and Web.
     """
 
@@ -27,20 +28,14 @@ class FletAudioPlayer(BaseAudioPlayer):
         self._on_complete_cb: Optional[Callable[[], None]] = None
         self._on_error_cb: Optional[Callable[[Exception], None]] = None
 
-        # Build Flet native Audio control
-        self.audio_control = ft.Audio(
+        # Build Flet native Audio control using the new flet_audio package
+        self.audio_control = fta.Audio(
             autoplay=False,
             volume=1.0,
             balance=0.0,
+            release_mode=fta.ReleaseMode.STOP,
             on_state_changed=self._handle_state_changed,
         )
-
-        # Ensure release_mode is set if available in the installed Flet version
-        try:
-            if hasattr(ft, "audio") and hasattr(ft.audio, "ReleaseMode"):
-                self.audio_control.release_mode = ft.audio.ReleaseMode.STOP
-        except Exception:
-            pass
 
         # Mount to page overlay
         if self.audio_control not in self.page.overlay:
@@ -128,7 +123,7 @@ class FletAudioPlayer(BaseAudioPlayer):
         """Provides diagnostic metadata for the in-app audio inspection dialog."""
         return {
             "player_name": self.player_name,
-            "engine": "Flutter Media Engine (flet.Audio)",
+            "engine": "Flutter Media Engine (fta.Audio)",
             "available_backends": ["Flutter Audio Plugin", "ExoPlayer (Android)", "AVPlayer (iOS)"],
             "current_source": self._current_url or "None",
             "overlay_mounted": self.audio_control in self.page.overlay,
