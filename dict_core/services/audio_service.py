@@ -149,8 +149,11 @@ class AudioService:
     ) -> Path:
         """
         Resolves/downloads the audio file and triggers playback on the configured player engine.
+        Gracefully falls back to direct URL streaming if Android local caching fails.
         """
         logger.info("[AUDIO PIPELINE] PLAY REQUEST initiated")
+        resolved_url = None
+        
         try:
             resolved_url = self.resolve_audio_url(source)
             if hasattr(self.player, "set_current_url"):
@@ -159,12 +162,18 @@ class AudioService:
             pass
 
         try:
+            # Attempts to download and cache the MP3 (often fails on Android strict sandboxing)
             local_path = self.get_audio_file(source)
         except Exception as exc:
-            logger.error("[AUDIO PIPELINE] PLAY REQUEST FAILED during download/cache: %s", exc)
-            if on_error:
-                on_error(exc)
-            raise
+            logger.warning("[AUDIO PIPELINE] Local disk cache failed (expected on Android): %s", exc)
+            if resolved_url:
+                logger.info("[AUDIO PIPELINE] Bypassing cache -> streaming directly from URL.")
+                local_path = resolved_url  # Use the web URL as the path instead
+            else:
+                logger.error("[AUDIO PIPELINE] PLAY REQUEST FAILED: No valid URL to fallback on.")
+                if on_error:
+                    on_error(exc)
+                raise
 
         logger.info("[AUDIO PIPELINE] PLAYER SOURCE SET: %s", str(local_path))
         logger.info("[AUDIO PIPELINE] PLAYBACK STARTED on %s", self.player.player_name)
@@ -185,7 +194,7 @@ class AudioService:
                 on_complete=_wrapped_complete,
                 on_error=_wrapped_error,
             )
-            return local_path
+            return Path(local_path) if not str(local_path).startswith("http") else local_path
         except Exception as exc:
             playback_err = AudioPlaybackError(f"Playback failed on player '{self.player.player_name}': {exc}")
             _wrapped_error(playback_err)

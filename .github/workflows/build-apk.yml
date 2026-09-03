@@ -11,6 +11,7 @@ jobs:
   build:
     name: Build APK
     runs-on: ubuntu-latest
+    run: flet build apk --yes --include-packages flet_audio
 
     steps:
       - name: Checkout Source Code
