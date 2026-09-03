@@ -6,7 +6,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="dictionary-app",
-    version="1.0.0",
+    version="1.0.1",
     description="Cross-platform English dictionary application with offline lexicon, audio playback, and reactive Flet UI.",
     long_description=open("README.md", "r", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
