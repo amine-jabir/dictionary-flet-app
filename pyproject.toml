@@ -27,8 +27,8 @@ classifiers = [
 ]
 dependencies = [
     "requests>=2.28.0",
-    "flet==0.26.0",
-    "flet-audio==0.26.0",
+    "flet>=0.80.0",
+    "flet-audio>=0.80.0",
 ]
 
 [project.scripts]

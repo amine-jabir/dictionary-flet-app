@@ -42,7 +42,7 @@ jobs:
 
       - name: Build Android APK
         run: |
-          flet build apk --yes --include-packages flet_audio
+          flet build apk --yes --clear-cache
 
       - name: Upload Android APK
         uses: actions/upload-artifact@v4
