@@ -58,3 +58,6 @@ permissions = [
     "android.permission.MODIFY_AUDIO_SETTINGS",
     "android.permission.WAKE_LOCK",
 ]
+
+[tool.flet.android.manifest_application]
+usesCleartextTraffic = "true"
