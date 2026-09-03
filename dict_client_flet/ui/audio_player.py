@@ -34,7 +34,7 @@ class FletAudioPlayer(BaseAudioPlayer):
             volume=1.0,
             balance=0.0,
             release_mode=fta.ReleaseMode.STOP,
-            on_state_changed=self._handle_state_changed,
+            on_state_change=self._handle_state_changed,  # Fixed the parameter name here
         )
 
         # Mount to page overlay
